@@ -161,9 +161,33 @@
           <p class="muted small" id="watchInfo"></p>
         </div>
         <div class="card">
+          <h3>Обслуживание по расписанию</h3>
+          <label class="switch"><input type="checkbox" id="schEnabled"><span></span> Автоматические резервные копии</label>
+          <div class="row">
+            <label>День<select id="schDay">
+              <option value="0">Понедельник</option><option value="1">Вторник</option><option value="2">Среда</option>
+              <option value="3">Четверг</option><option value="4">Пятница</option><option value="5">Суббота</option>
+              <option value="6">Воскресенье</option></select></label>
+            <label>Время<input id="schTime" type="time"></label>
+            <label>Пояс (UTC±)<input id="schTz" type="number" min="-12" max="14" step="1" style="width:70px"></label>
+          </div>
+          <label class="switch"><input type="checkbox" id="schRestart"><span></span> Перезагружать сервер после копии</label>
+          <div class="row">
+            <label>Предупреждать клиентов за, ч<input id="schWarn" type="number" min="0" max="168" step="1" style="width:70px"></label>
+            <label>Хранить копий<input id="schKeep" type="number" min="1" max="100" step="1" style="width:70px"></label>
+          </div>
+          <p class="muted small">Порядок: предупреждение всем в сети → за 10 минут → за минуту → копия → перезагрузка (~1 минута). Старые копии сверх лимита удаляются.</p>
+          <p class="muted small" id="schNext"></p>
+          <div class="row end"><button id="schSave" class="btn primary" type="button">Сохранить</button></div>
+        </div>
+        <div class="card">
           <h3>Резервные копии</h3>
-          <p class="muted small">Архив базы и файлов одним .tar.gz (можно создавать на работающем сервере). Хранится в папке данных, в backups.</p>
-          <div class="row"><button id="bkCreate" class="btn primary" type="button">Создать копию</button></div>
+          <p class="muted small">Архив .tar.gz: база целиком (пользователи, сообщения, настройки админки) и все файлы. Создаётся на работающем сервере; прежние данные при восстановлении сохраняются в backups/pre-restore-*.</p>
+          <div class="row">
+            <button id="bkCreate" class="btn primary" type="button">Создать копию</button>
+            <label class="btn ghost" for="bkUpload" style="cursor:pointer">Загрузить и восстановить…</label>
+            <input id="bkUpload" type="file" accept=".tar.gz,.tgz,application/gzip" class="hidden">
+          </div>
           <ul class="list" id="bkList"></ul>
         </div>
       </div>

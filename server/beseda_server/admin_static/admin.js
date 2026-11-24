@@ -607,8 +607,27 @@ async function loadSettings() {
     kv.append(h("dt", { text: k }), h("dd", { text: String(v) }));
   }
   $("#ver").textContent = "версия " + s.version;
+  const sc = s.schedule || {};
+  $("#schEnabled").checked = !!sc.enabled;
+  $("#schRestart").checked = !!sc.restart;
+  $("#schDay").value = String(sc.day ?? 0);
+  $("#schTime").value = sc.time || "00:00";
+  $("#schTz").value = sc.tz ?? 12;
+  $("#schWarn").value = sc.warn_h ?? 24;
+  $("#schKeep").value = sc.keep ?? 8;
+  $("#schNext").textContent = sc.enabled && sc.next ? "Следующий запуск: " + sc.next + " (" + sc.day_name + ", UTC" +
+    (sc.tz >= 0 ? "+" : "") + sc.tz + ")" : "Автоматические копии выключены.";
   loadBackups().catch(() => {});
 }
+$("#schSave").addEventListener("click", () => {
+  const time = $("#schTime").value || "00:00";
+  act("/api/admin/settings", { schedule: {
+    enabled: $("#schEnabled").checked, restart: $("#schRestart").checked,
+    day: parseInt($("#schDay").value, 10), time,
+    tz: parseFloat($("#schTz").value || "12"), warn_h: parseFloat($("#schWarn").value || "0"),
+    keep: parseInt($("#schKeep").value || "8", 10) } }, "Расписание сохранено")
+    .then(() => loadSettings()).catch(() => {});
+});
 $("#regGen").addEventListener("click", () => {
   const a = new Uint8Array(6);
   crypto.getRandomValues(a);
@@ -685,11 +704,55 @@ async function loadBackups() {
         h("span", { class: "muted small", text: size(b.size) + " · " + dt(b.mtime) })),
       h("div", { class: "row" },
         h("button", { class: "btn ghost small", type: "button", text: "Скачать", onclick: () => downloadBackup(b.name) }),
+        h("button", { class: "btn ghost small", type: "button", text: "Восстановить", onclick: () => restoreBackup(b) }),
         h("button", { class: "btn ghost small", type: "button", text: "Удалить", onclick: async () => {
           const v = await ask({ title: "Удалить копию?", danger: true, ok: "Удалить", text: b.name });
           if (v && await del("/api/admin/server/backups/" + encodeURIComponent(b.name), "Копия удалена")) loadBackups();
         } }))));
   }
+}
+async function restoreBackup(b) {
+  const v = await ask({ title: "Восстановить из «" + b.name + "»?", danger: true, ok: "Восстановить",
+    text: "Текущие данные (пользователи, сообщения, файлы, настройки) будут заменены содержимым копии от " +
+          dt(b.mtime) + ".\nПрежние данные сохранятся в backups/pre-restore-*. Сервер перезагрузится на ~1 минуту." });
+  if (!v) return;
+  await act("/api/admin/server/backups/" + encodeURIComponent(b.name) + "/restore", {});
+  toast("Восстановление запущено — сервер перезагружается…");
+  waitServerBack();
+}
+$("#bkUpload").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const v = await ask({ title: "Восстановить из загруженного архива?", danger: true, ok: "Загрузить и восстановить",
+    text: file.name + " (" + size(file.size) + ")\n\nТекущие данные будут заменены содержимым архива. " +
+          "Прежние сохранятся в backups/pre-restore-*. Сервер перезагрузится на ~1 минуту." });
+  if (!v) return;
+  toast("Загружаю архив…");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/admin/server/restore", { method: "POST",
+      headers: { "Authorization": "Bearer " + token }, body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    toast("Восстановление запущено — сервер перезагружается…");
+    waitServerBack();
+  } catch (err) { toast("Не удалось: " + err.message, true); }
+});
+function waitServerBack() {
+  const t0 = Date.now();
+  const timer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/info");
+      if (r.ok && Date.now() - t0 > 8000) {
+        clearInterval(timer);
+        toast("Сервер снова в сети");
+        go(page);
+      }
+    } catch (e) { /* ещё перезагружается */ }
+  }, 2500);
+  setTimeout(() => clearInterval(timer), 300000);
 }
 async function downloadBackup(name) {
   try {

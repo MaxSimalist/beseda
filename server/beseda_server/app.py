@@ -27,7 +27,7 @@ from .config import Config
 from .db import DB, check_password
 from .voice import VoiceRelay
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 log = logging.getLogger("beseda")
 
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.\-]{2,32}$")
@@ -734,10 +734,13 @@ def create_app(cfg: Config | None = None) -> Starlette:
         transport, _ = await loop.create_datagram_endpoint(lambda: relay, sock=sock)
         log.info("UDP голос: %s:%s", cfg.udp_host, cfg.udp_port)
         task = asyncio.create_task(cleanup_loop())
+        from .scheduler import scheduler_loop
+        sched = asyncio.create_task(scheduler_loop(hub, cfg))
         try:
             yield
         finally:
             task.cancel()
+            sched.cancel()
             transport.close()
 
     app = Starlette(

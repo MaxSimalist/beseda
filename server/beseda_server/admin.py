@@ -377,10 +377,12 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
 
     # --- настройки и объявления ---
     async def settings_get(request):
+        from .scheduler import describe
         return JSONResponse({"registration_open": hub.reg_open(), "registration_code": hub.reg_code(),
                              "env_registration_code": cfg.registration_code,
                              "max_upload_mb": hub.max_upload_mb(), "env_max_upload_mb": cfg.max_upload_mb,
-                             "udp_port": cfg.udp_port, "data_dir": str(cfg.data_dir), "version": VERSION})
+                             "udp_port": cfg.udp_port, "data_dir": str(cfg.data_dir), "version": VERSION,
+                             "schedule": describe(db)})
 
     async def settings_set(request):
         data = await json_body(request)
@@ -399,6 +401,39 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
                     return err("Размер файла: от 1 до 4096 МБ")
                 db.set_setting("max_upload_mb", mb)
             audit(request, "изменил лимит файла: %s МБ", hub.max_upload_mb())
+        if "schedule" in data:                           # расписание обслуживания
+            s = data["schedule"] or {}
+            try:
+                if "enabled" in s:
+                    db.set_setting("auto_backup", "1" if s["enabled"] else "0")
+                if "restart" in s:
+                    db.set_setting("auto_restart", "1" if s["restart"] else "0")
+                if "day" in s:
+                    db.set_setting("auto_day", int(s["day"]) % 7)
+                if "time" in s:
+                    hh, mm = str(s["time"]).split(":")[:2]
+                    if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                        raise ValueError
+                    db.set_setting("auto_time", f"{int(hh):02d}:{int(mm):02d}")
+                if "tz" in s:
+                    tz = float(s["tz"])
+                    if not -12 <= tz <= 14:
+                        raise ValueError
+                    db.set_setting("auto_tz", tz)
+                if "warn_h" in s:
+                    w = float(s["warn_h"])
+                    if not 0 <= w <= 168:
+                        raise ValueError
+                    db.set_setting("auto_warn_h", w)
+                if "keep" in s:
+                    k = int(s["keep"])
+                    if not 1 <= k <= 100:
+                        raise ValueError
+                    db.set_setting("auto_keep", k)
+            except (TypeError, ValueError):
+                return err("Некорректные параметры расписания")
+            from .scheduler import describe
+            audit(request, "изменил расписание обслуживания: %s", describe(db))
         audit(request, "изменил настройки: регистрация=%s, код=%s, файл до %s МБ", hub.reg_open(),
               "задан" if hub.reg_code() else "нет", hub.max_upload_mb())
         return ok()
@@ -483,6 +518,83 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         audit(request, "удалил резервную копию %s", p.name)
         return ok()
 
+    # --- восстановление из резервной копии ---
+    def _stage_restore(tar_path: Path) -> str:
+        """Проверить архив и распаковать в data/_restore. Возвращает "" или текст ошибки.
+        Сами данные подменит __main__.apply_pending_restore при перезапуске сервера."""
+        import shutil
+        import sqlite3
+        import tarfile
+        stage = cfg.data_dir / "_restore"
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(parents=True)
+        try:
+            with tarfile.open(tar_path, "r:gz") as tar:
+                names = set(tar.getnames())
+                if "beseda.db" not in names:
+                    return "в архиве нет beseda.db — это не резервная копия «Беседы»"
+                members = []
+                for m in tar.getmembers():
+                    if ".." in Path(m.name).parts or m.name.startswith(("/", "\\")):
+                        return "повреждённый архив (подозрительные пути)"
+                    if m.name == "beseda.db" or m.name == "files" or m.name.startswith("files/"):
+                        members.append(m)
+                tar.extractall(stage, members=members)
+        except (tarfile.TarError, OSError, EOFError) as exc:
+            shutil.rmtree(stage, ignore_errors=True)
+            return f"не удалось прочитать архив: {exc}"
+        try:                                        # база должна открываться и быть базой «Беседы»
+            con = sqlite3.connect(str(stage / "beseda.db"))
+            good = (con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                    and con.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='users'").fetchone()[0] == 1)
+            con.close()
+            if not good:
+                raise ValueError("quick_check")
+        except Exception:
+            shutil.rmtree(stage, ignore_errors=True)
+            return "файл beseda.db в архиве повреждён или это не база «Беседы»"
+        return ""
+
+    def _restart_for_restore(request, what: str):
+        audit(request, "запустил восстановление из копии: %s", what)
+        threading.Timer(1.2, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        return ok(detail="Восстановление запланировано: сервер перезагрузится и поднимется на данных "
+                         "из копии (около минуты). Прежние данные сохранятся в backups/pre-restore-*")
+
+    async def backup_restore(request):
+        p = _backup_path(request)
+        if p is None or not p.exists():
+            return err("Файл не найден", 404)
+        problem = await run_in_threadpool(_stage_restore, p)
+        if problem:
+            return err("Восстановление невозможно: " + problem)
+        return _restart_for_restore(request, p.name)
+
+    async def backup_upload_restore(request):
+        tmp = cfg.data_dir / "_restore_upload.tar.gz"
+        form = await request.form(max_files=1, max_fields=2)
+        try:
+            f = form.get("file")
+            if f is None or not hasattr(f, "read"):
+                return err("Нет файла")
+            size = 0
+            with open(tmp, "wb") as out:
+                while chunk := await f.read(1024 * 256):
+                    size += len(chunk)
+                    if size > 8 * 1024 ** 3:            # предохранитель: 8 ГБ
+                        raise ValueError("слишком большой архив")
+                    out.write(chunk)
+        except ValueError as exc:
+            tmp.unlink(missing_ok=True)
+            return err(str(exc))
+        finally:
+            await form.close()
+        problem = await run_in_threadpool(_stage_restore, tmp)
+        tmp.unlink(missing_ok=True)
+        if problem:
+            return err("Восстановление невозможно: " + problem)
+        return _restart_for_restore(request, "загруженный архив")
+
     async def broadcast(request):
         data = await json_body(request)
         text = str(data.get("text") or "").strip()[:500]
@@ -528,8 +640,10 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         Route(A + "/server/update", guard(update_run), methods=["POST"]),
         Route(A + "/server/backups", guard(backup_list)),
         Route(A + "/server/backups", guard(backup_create), methods=["POST"]),
+        Route(A + "/server/backups/{name}/restore", guard(backup_restore), methods=["POST"]),
         Route(A + "/server/backups/{name}", guard(backup_download)),
         Route(A + "/server/backups/{name}", guard(backup_delete), methods=["DELETE"]),
+        Route(A + "/server/restore", guard(backup_upload_restore), methods=["POST"]),
         Route(A + "/broadcast", guard(broadcast), methods=["POST"]),
         Route(A + "/logs", guard(logs, mod=True)),
     ]

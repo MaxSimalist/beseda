@@ -45,9 +45,32 @@ def banner(cfg: Config):
     print("=" * 60, flush=True)
 
 
+def apply_pending_restore(cfg: Config):
+    """Если админка подготовила восстановление из копии (папка data/_restore) — применяем
+    ДО открытия базы. Прежние данные не пропадают: уезжают в backups/pre-restore-<время>."""
+    import shutil
+    import time
+    stage = cfg.data_dir / "_restore"
+    if not (stage / "beseda.db").exists():
+        return
+    safe = cfg.data_dir / "backups" / f"pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+    safe.mkdir(parents=True, exist_ok=True)
+    for p in cfg.data_dir.glob("beseda.db*"):
+        shutil.move(str(p), safe / p.name)
+    shutil.move(str(stage / "beseda.db"), cfg.db_path)
+    if (stage / "files").exists():
+        if cfg.files_dir.exists():
+            shutil.move(str(cfg.files_dir), safe / "files")
+        shutil.move(str(stage / "files"), cfg.files_dir)
+    shutil.rmtree(stage, ignore_errors=True)
+    print(f"Восстановление из резервной копии выполнено; прежние данные — в {safe}", flush=True)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = Config()
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    apply_pending_restore(cfg)
     app = create_app(cfg)
     banner(cfg)
     uvicorn.run(
