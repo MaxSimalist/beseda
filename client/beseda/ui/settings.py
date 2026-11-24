@@ -310,7 +310,13 @@ class SettingsDialog(QDialog):
         pw.setObjectName("flat")
         pw.clicked.connect(self._change_password)
         form.addRow("", pw)
-        server = QLabel(self.api.base + ("  ⚠ без шифрования" if self.api.insecure else "  🔒"))
+        if self.api.base.startswith("http://"):
+            mark = "  ⚠ без шифрования"
+        elif self.api.insecure_ssl:
+            mark = "  ⚠ самоподписанный сертификат"
+        else:
+            mark = "  🔒"
+        server = QLabel(self.api.base + mark)
         server.setObjectName("muted")
         form.addRow("Сервер", server)
         out = QPushButton("Выйти из аккаунта")
