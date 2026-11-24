@@ -1,0 +1,58 @@
+# «Беседа» в Docker: сервер + Caddy (автоматический HTTPS-сертификат Let's Encrypt).
+# Настройки — в файле .env рядом (его создаёт deploy/docker-install.sh).
+#
+#   docker compose up -d --build      запустить / обновить
+#   docker compose logs -f beseda     логи
+#   docker compose down               остановить (данные сохраняются)
+
+name: beseda
+
+services:
+  beseda:
+    build: .
+    image: beseda-server:latest
+    container_name: beseda
+    restart: unless-stopped
+    environment:
+      BESEDA_REG_CODE: ${BESEDA_REG_CODE:-}
+      BESEDA_MAX_UPLOAD_MB: ${BESEDA_MAX_UPLOAD_MB:-50}
+      BESEDA_UDP_PORT: ${BESEDA_UDP_PORT:-50000}
+      BESEDA_UDP_PUBLIC_HOST: ${BESEDA_UDP_PUBLIC_HOST:-}
+      BESEDA_PUBLIC_URL: ${BESEDA_PUBLIC_URL:-}
+      # HTTP-порт сервера наружу не открыт, к нему ходит только Caddy — его заголовкам доверяем
+      BESEDA_TRUSTED_PROXIES: "*"
+    volumes:
+      - beseda-data:/data
+    ports:
+      # голос идёт напрямую, мимо Caddy
+      - "${BESEDA_UDP_PORT:-50000}:${BESEDA_UDP_PORT:-50000}/udp"
+    expose:
+      - "8765"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  caddy:
+    image: caddy:2
+    container_name: beseda-caddy
+    restart: unless-stopped
+    depends_on: [beseda]
+    environment:
+      # домен (chat.example.ru) → HTTPS; ":80" → без домена, обычный HTTP по IP
+      BESEDA_SITE: ${BESEDA_SITE:-:80}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  beseda-data:
+  caddy-data:
+  caddy-config:

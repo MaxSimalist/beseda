@@ -1,0 +1,7 @@
+{$BESEDA_SITE} {
+	encode gzip
+	# WebSocket Caddy проксирует сам, отдельная настройка не нужна
+	reverse_proxy beseda:8765 {
+		flush_interval -1
+	}
+}

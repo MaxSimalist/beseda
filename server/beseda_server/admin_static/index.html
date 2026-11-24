@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Беседа · Админка</title>
+<link rel="stylesheet" href="/admin/admin.css">
+<script src="/admin/admin.js" defer></script>
+</head>
+<body>
+
+<!-- Вход -->
+<section id="login" class="login hidden">
+  <form id="loginForm" class="card login-card" autocomplete="on">
+    <div class="logo big">Б</div>
+    <h1>Администрирование</h1>
+    <p class="muted">Войдите учётной записью администратора</p>
+    <label>Логин<input id="lUser" name="username" autocomplete="username" required></label>
+    <label>Пароль<input id="lPass" name="password" type="password" autocomplete="current-password" required></label>
+    <p id="lErr" class="error"></p>
+    <button class="btn primary wide" type="submit">Войти</button>
+  </form>
+</section>
+
+<!-- Приложение -->
+<div id="app" class="app hidden">
+  <aside class="side">
+    <div class="brand"><div class="logo">Б</div><div><b>Беседа</b><small class="muted" id="ver"></small></div></div>
+    <nav id="nav">
+      <a data-page="overview" class="active">Обзор</a>
+      <a data-page="users">Пользователи</a>
+      <a data-page="guilds">Серверы</a>
+      <a data-page="voice">Голос <span id="voiceBadge" class="pill hidden"></span></a>
+      <a data-page="messages">Сообщения</a>
+      <a data-page="files">Файлы</a>
+      <a data-page="settings">Настройки</a>
+      <a data-page="logs">Журнал</a>
+    </nav>
+    <div class="me">
+      <span id="meName"></span>
+      <button id="logout" class="btn ghost small" type="button">Выйти</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- Обзор -->
+    <section data-view="overview">
+      <header class="page-head"><h2>Обзор</h2><span class="muted" id="uptime"></span></header>
+      <div class="stats" id="statCards"></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>Сообщения за 14 дней</h3>
+          <div id="chart" class="chart"></div>
+        </div>
+        <div class="card">
+          <h3>Объявление всем в сети</h3>
+          <p class="muted">Появится у каждого, кто сейчас подключён.</p>
+          <textarea id="bcText" rows="3" maxlength="500" placeholder="Например: в 23:00 сервер перезапустится на 5 минут"></textarea>
+          <div class="row end"><button id="bcSend" class="btn primary" type="button">Отправить</button></div>
+          <h3 class="mt">Регистрация</h3>
+          <p id="regInfo"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Пользователи -->
+    <section data-view="users" class="hidden">
+      <header class="page-head">
+        <h2>Пользователи</h2>
+        <div class="row">
+          <input id="userFilter" class="search" placeholder="Поиск по логину или имени">
+          <button id="userNew" class="btn primary" type="button">Создать</button>
+        </div>
+      </header>
+      <div class="card flush"><table class="table" id="usersTable">
+        <thead><tr><th>Пользователь</th><th>Статус</th><th class="num">Серверов</th><th class="num">Сообщений</th><th class="num">Файлы</th><th>Был в сети</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Серверы -->
+    <section data-view="guilds" class="hidden">
+      <header class="page-head"><h2>Серверы</h2></header>
+      <div class="card flush"><table class="table" id="guildsTable">
+        <thead><tr><th>Название</th><th>Владелец</th><th class="num">Участников</th><th class="num">Каналов</th><th class="num">Сообщений</th><th>Приглашение</th><th>Создан</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div id="guildDetail" class="hidden"></div>
+    </section>
+
+    <!-- Голос -->
+    <section data-view="voice" class="hidden">
+      <header class="page-head"><h2>Голос сейчас</h2><span class="muted">обновляется каждые 2 секунды</span></header>
+      <div class="card flush"><table class="table" id="voiceTable">
+        <thead><tr><th>Кто</th><th>Где</th><th>Состояние</th><th>UDP-адрес</th><th class="num">Пакетов от него</th><th class="num">Пакетов ему</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Сообщения -->
+    <section data-view="messages" class="hidden">
+      <header class="page-head"><h2>Сообщения</h2></header>
+      <form id="msgForm" class="row filters">
+        <input id="msgQ" class="search grow" placeholder="Текст для поиска (пусто — последние)">
+        <select id="msgGuild"><option value="">Все серверы</option></select>
+        <select id="msgUser"><option value="">Все авторы</option></select>
+        <button class="btn primary" type="submit">Найти</button>
+      </form>
+      <div id="msgList" class="msg-list"></div>
+    </section>
+
+    <!-- Файлы -->
+    <section data-view="files" class="hidden">
+      <header class="page-head">
+        <h2>Файлы</h2>
+        <button id="filesCleanup" class="btn ghost" type="button">Удалить неотправленные и потерянные</button>
+      </header>
+      <p class="muted" id="filesSummary"></p>
+      <div class="card flush"><table class="table" id="filesTable">
+        <thead><tr><th>Файл</th><th class="num">Размер</th><th>Загрузил</th><th>Где</th><th>Когда</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Настройки -->
+    <section data-view="settings" class="hidden">
+      <header class="page-head"><h2>Настройки</h2></header>
+      <div class="grid2">
+        <div class="card">
+          <h3>Регистрация новых пользователей</h3>
+          <label class="switch"><input type="checkbox" id="regOpen"><span></span> Регистрация открыта</label>
+          <label>Код приглашения для регистрации
+            <div class="row"><input id="regCode" class="grow" maxlength="64" placeholder="пусто — регистрация без кода">
+            <button id="regGen" class="btn ghost" type="button">Сгенерировать</button></div>
+          </label>
+          <p class="muted small" id="regEnv"></p>
+          <div class="row end"><button id="regSave" class="btn primary" type="button">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Сервер</h3>
+          <dl class="kv" id="srvInfo"></dl>
+          <p class="muted small">Эти параметры задаются в файле настроек сервера (/etc/beseda.env или .bat-файле) и меняются с перезапуском.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Журнал -->
+    <section data-view="logs" class="hidden">
+      <header class="page-head">
+        <h2>Журнал</h2>
+        <div class="row">
+          <label class="switch"><input type="checkbox" id="logAdminOnly"><span></span> Только действия админов</label>
+          <label class="switch"><input type="checkbox" id="logFollow" checked><span></span> Прокручивать</label>
+        </div>
+      </header>
+      <div class="card flush"><pre id="logBox" class="log"></pre></div>
+    </section>
+  </main>
+</div>
+
+<!-- Модальное окно -->
+<div id="modal" class="modal hidden">
+  <form id="modalForm" class="card modal-card">
+    <h3 id="mTitle"></h3>
+    <p id="mText" class="pre"></p>
+    <div id="mFields"></div>
+    <p id="mErr" class="error"></p>
+    <div class="row end">
+      <button id="mCancel" class="btn ghost" type="button">Отмена</button>
+      <button id="mOk" class="btn primary" type="submit">ОК</button>
+    </div>
+  </form>
+</div>
+<div id="toast" class="toast hidden"></div>
+</body>
+</html>

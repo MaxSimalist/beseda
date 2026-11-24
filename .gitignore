@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Сборка клиента (PyInstaller)
+build/
+dist/
+*.spec
+libopus-0.x64.dll
+
+# Установленная копия клиента (если лежит рядом)
+_internal/
+Beseda.exe
+
+# Обновления и журналы
+_backup/
+update.log
+
+# Данные тестового сервера и секреты развёртывания
+server/data/
+server/.env
+backups/

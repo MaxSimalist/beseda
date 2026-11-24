@@ -1,0 +1,23 @@
+[Unit]
+Description=Beseda chat server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=beseda
+Group=beseda
+EnvironmentFile=/etc/beseda.env
+WorkingDirectory=/opt/beseda
+ExecStart=/opt/beseda/venv/bin/python -m beseda_server
+Restart=always
+RestartSec=3
+
+# Песочница
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/beseda
+
+[Install]
+WantedBy=multi-user.target

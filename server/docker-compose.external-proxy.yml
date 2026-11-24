@@ -1,0 +1,12 @@
+# Вариант, когда порты 80/443 уже заняты своим прокси (nginx, Traefik, Nginx Proxy Manager…).
+# Caddy не запускается, сервер слушает 127.0.0.1:8765 — направьте на него свой прокси (с поддержкой WebSocket).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external-proxy.yml up -d --build
+# (docker-install.sh включает этот режим сам и записывает COMPOSE_FILE в .env)
+
+services:
+  beseda:
+    ports:
+      - "127.0.0.1:${BESEDA_HTTP_PORT:-8765}:8765"
+  caddy:
+    profiles: ["caddy"]
