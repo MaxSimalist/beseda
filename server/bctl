@@ -5,22 +5,24 @@
 #   ./bctl users | make-admin ЛОГИН | reset-password ЛОГИН [ПАРОЛЬ] | unban ЛОГИН
 set -euo pipefail
 cd "$(dirname "$0")"
+# docker compose v2 (плагин) или docker-compose v1 (отдельная утилита)
+if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-  status)   docker compose ps ;;
-  logs)     docker compose logs -f --tail 100 "${@:-beseda}" ;;
-  restart)  docker compose restart ;;
-  stop)     docker compose stop ;;
-  start)    docker compose up -d ;;
-  update)   docker compose up -d --build --remove-orphans && docker image prune -f >/dev/null ;;
+  status)   $DC ps ;;
+  logs)     $DC logs -f --tail 100 "${@:-beseda}" ;;
+  restart)  $DC restart ;;
+  stop)     $DC stop ;;
+  start)    $DC up -d ;;
+  update)   $DC up -d --build --remove-orphans && docker image prune -f >/dev/null ;;
   backup)
-    f="$(docker compose exec -T beseda python -m beseda_server.manage backup | tr -d '\r')"
+    f="$($DC exec -T beseda python -m beseda_server.manage backup | tr -d '\r')"
     mkdir -p backups
-    docker compose cp "beseda:$f" "backups/$(basename "$f")"
+    $DC cp "beseda:$f" "backups/$(basename "$f")"
     chmod 600 "backups/$(basename "$f")"  # внутри хэши паролей
-    docker compose exec -T beseda rm -f "$f"
+    $DC exec -T beseda rm -f "$f"
     echo "Готово: backups/$(basename "$f")" ;;
   users|make-admin|reset-password|unban)
-    docker compose exec -T beseda python -m beseda_server.manage "$cmd" "$@" ;;
+    $DC exec -T beseda python -m beseda_server.manage "$cmd" "$@" ;;
   *) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
