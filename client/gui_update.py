@@ -202,5 +202,8 @@ class UpdateDialog(QDialog):
         updater.launch_apply(src)
         self.accept()
         win = self.button.win
-        win.close()                      # closeEvent: сохраняет настройки и глушит голос
+        if hasattr(win, "quit_app"):
+            win.quit_app()               # настоящий выход (close() теперь сворачивает в трей)
+        else:
+            win.close()
         QApplication.quit()

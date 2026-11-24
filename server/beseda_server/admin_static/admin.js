@@ -156,26 +156,39 @@ function ask({ title, text = "", fields = [], ok = "ОК", danger = false, valid
 }
 
 /* ---------- меню действий ---------- */
+/* Меню рисуется в <body> с position:fixed — иначе его обрезает таблица с overflow:auto. */
 let openMenu = null;
-document.addEventListener("click", () => { if (openMenu) { openMenu.remove(); openMenu = null; } });
+function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
+document.addEventListener("click", closeMenu);
+window.addEventListener("scroll", closeMenu, true);
+window.addEventListener("resize", closeMenu);
 function menuButton(items) {
-  const wrap = h("div", { class: "menu-wrap" });
   const btn = h("button", { class: "btn ghost small", type: "button", text: "Действия ▾" });
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (openMenu) { openMenu.remove(); openMenu = null; }
+    closeMenu();
     const m = h("div", { class: "menu" });
     for (const it of items) {
       if (!it) continue;
       if (it === "-") { m.append(h("hr")); continue; }
       m.append(h("button", { type: "button", class: it.danger ? "danger" : "", text: it.label,
-        onclick: (ev) => { ev.stopPropagation(); m.remove(); openMenu = null; it.run(); } }));
+        onclick: (ev) => { ev.stopPropagation(); closeMenu(); it.run(); } }));
     }
-    wrap.append(m);
+    m.style.position = "fixed";
+    m.style.visibility = "hidden";
+    document.body.append(m);
+    const r = btn.getBoundingClientRect();
+    const mw = m.offsetWidth, mh = m.offsetHeight;
+    let left = Math.min(Math.max(8, r.right - mw), window.innerWidth - mw - 8);
+    let top = r.bottom + 4;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);  // вверх, если снизу нет места
+    m.style.left = left + "px";
+    m.style.top = top + "px";
+    m.style.right = "auto";
+    m.style.visibility = "";
     openMenu = m;
   });
-  wrap.append(btn);
-  return wrap;
+  return btn;
 }
 
 /* ---------- вход / выход ---------- */
@@ -580,10 +593,14 @@ async function loadSettings() {
   $("#regEnv").textContent = s.env_registration_code
     ? "В файле настроек задан код «" + s.env_registration_code + "»; значение здесь его перекрывает."
     : "";
+  $("#maxUp").value = s.max_upload_mb;
+  $("#maxUpEnv").textContent = "В файле настроек сервера: " + s.env_max_upload_mb + " МБ; значение здесь его перекрывает.";
   const kv = clear($("#srvInfo"));
-  for (const [k, v] of [["UDP-порт голоса", s.udp_port], ["Макс. размер файла", s.max_upload_mb + " МБ"], ["Папка данных", s.data_dir]]) {
+  for (const [k, v] of [["Версия", s.version], ["UDP-порт голоса", s.udp_port], ["Папка данных", s.data_dir]]) {
     kv.append(h("dt", { text: k }), h("dd", { text: String(v) }));
   }
+  $("#ver").textContent = "версия " + s.version;
+  loadBackups().catch(() => {});
 }
 $("#regGen").addEventListener("click", () => {
   const a = new Uint8Array(6);
@@ -592,6 +609,103 @@ $("#regGen").addEventListener("click", () => {
 });
 $("#regSave").addEventListener("click", () =>
   act("/api/admin/settings", { registration_open: $("#regOpen").checked, registration_code: $("#regCode").value.trim() }, "Сохранено"));
+$("#maxUpSave").addEventListener("click", () => {
+  const mb = parseInt($("#maxUp").value, 10);
+  if (!mb || mb < 1 || mb > 4096) return toast("Размер файла: от 1 до 4096 МБ", true);
+  act("/api/admin/settings", { max_upload_mb: mb }, "Лимит файла: " + mb + " МБ");
+});
+
+/* --- перезагрузка --- */
+$("#srvRestart").addEventListener("click", async () => {
+  const v = await ask({ title: "Перезагрузить сервер?", ok: "Перезагрузить",
+    text: "Все подключения разорвутся примерно на 10 секунд — клиенты переподключатся сами." });
+  if (!v) return;
+  try { await act("/api/admin/server/restart", {}); } catch (e) { /* сервер уже падает */ }
+  toast("Сервер перезагружается…");
+  const t0 = Date.now();
+  const timer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/info");
+      if (r.ok && Date.now() - t0 > 5000) {
+        clearInterval(timer);
+        toast("Сервер снова в сети");
+        go(page);
+      }
+    } catch (e) { /* ещё перезагружается */ }
+  }, 2000);
+  setTimeout(() => clearInterval(timer), 120000);
+});
+
+/* --- обновление --- */
+$("#updCheck").addEventListener("click", async () => {
+  $("#updBox").classList.remove("hidden");
+  $("#updInfo").textContent = "Проверяю GitHub…";
+  $("#updNotes").classList.add("hidden");
+  $("#updRun").classList.add("hidden");
+  let r;
+  try { r = await api("/api/admin/server/update"); }
+  catch (e) { $("#updInfo").textContent = e.message; return; }
+  const w = r.watcher;
+  $("#watchInfo").textContent = w
+    ? "Авто-обновлятор на сервере: " + ({ done: "последнее обновление успешно", running: "идёт обновление…",
+        error: "ошибка — " + (w.detail || "") }[w.state] || w.state) + (w.at ? " (" + ago(w.at) + ")" : "")
+    : "Авто-обновлятор на сервере ещё не запускался (нужен update-watch.sh в cron — см. README).";
+  if (!r.newer) { $("#updInfo").textContent = "Установлена последняя версия (" + r.current + ")."; return; }
+  clear($("#updInfo")).append("Доступна версия ", h("b", { text: r.latest }), " (у вас " + r.current + "). ",
+    h("a", { href: r.page, target: "_blank", rel: "noopener", text: "Что нового" }));
+  if (r.notes) { $("#updNotes").textContent = r.notes; $("#updNotes").classList.remove("hidden"); }
+  $("#updRun").classList.remove("hidden");
+});
+$("#updRun").addEventListener("click", async () => {
+  const v = await ask({ title: "Обновить сервер?", ok: "Обновить",
+    text: "Обновлятор скачает новую версию из репозитория, пересоберёт контейнер и перезапустит сервер. " +
+          "Это займёт несколько минут, в это время чат будет недоступен." });
+  if (!v) return;
+  await act("/api/admin/server/update", {});
+  $("#updRun").classList.add("hidden");
+  $("#updInfo").textContent = "Обновление запрошено — сервер перезагрузится в течение пары минут. " +
+    "Следите за журналом или вернитесь сюда позже.";
+});
+
+/* --- резервные копии --- */
+async function loadBackups() {
+  const bs = (await api("/api/admin/server/backups")).backups;
+  const ul = clear($("#bkList"));
+  if (!bs.length) ul.append(h("li", { class: "muted", text: "Копий пока нет" }));
+  for (const b of bs) {
+    ul.append(h("li", {},
+      h("div", {}, h("b", { text: b.name }), " ",
+        h("span", { class: "muted small", text: size(b.size) + " · " + dt(b.mtime) })),
+      h("div", { class: "row" },
+        h("button", { class: "btn ghost small", type: "button", text: "Скачать", onclick: () => downloadBackup(b.name) }),
+        h("button", { class: "btn ghost small", type: "button", text: "Удалить", onclick: async () => {
+          const v = await ask({ title: "Удалить копию?", danger: true, ok: "Удалить", text: b.name });
+          if (v && await del("/api/admin/server/backups/" + encodeURIComponent(b.name), "Копия удалена")) loadBackups();
+        } }))));
+  }
+}
+async function downloadBackup(name) {
+  try {
+    const res = await fetch("/api/admin/server/backups/" + encodeURIComponent(name),
+      { headers: { "Authorization": "Bearer " + token } });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const blob = await res.blob();
+    const a = h("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  } catch (e) { toast("Не удалось скачать: " + e.message, true); }
+}
+$("#bkCreate").addEventListener("click", async () => {
+  $("#bkCreate").disabled = true;
+  try {
+    const r = await act("/api/admin/server/backups", {});
+    toast("Копия создана: " + r.name + " (" + size(r.size) + ")");
+    loadBackups();
+  } catch (e) { /* act уже показал ошибку */ }
+  $("#bkCreate").disabled = false;
+});
 
 /* ---------- Журнал ---------- */
 async function loadLogs(isRefresh) {

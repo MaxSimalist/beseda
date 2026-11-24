@@ -27,7 +27,7 @@ from .config import Config
 from .db import DB, check_password
 from .voice import VoiceRelay
 
-VERSION = "1.0.0"
+VERSION = "1.0.3"
 log = logging.getLogger("beseda")
 
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.\-]{2,32}$")
@@ -333,6 +333,14 @@ class Hub:
     def reg_open(self) -> bool:
         return self.db.get_setting("reg_open", "1") != "0"
 
+    def max_upload_mb(self) -> int:
+        """Лимит размера файла: значение из админки важнее, чем из beseda.env."""
+        v = self.db.get_setting("max_upload_mb")
+        try:
+            return max(1, int(v)) if v is not None else self.cfg.max_upload_mb
+        except (TypeError, ValueError):
+            return self.cfg.max_upload_mb
+
     def op_typing(self, conn, msg):
         ch = self.need_channel(conn.user_id, msg.get("channel_id"))
         self.to_guild(ch["guild_id"], {"type": "typing", "channel_id": ch["id"], "user_id": conn.user_id},
@@ -549,7 +557,7 @@ def create_app(cfg: Config | None = None) -> Starlette:
         return JSONResponse({"name": "Беседа", "version": VERSION,
                              "registration_open": hub.reg_open(),
                              "registration_code_required": bool(hub.reg_code()),
-                             "max_upload_mb": cfg.max_upload_mb})
+                             "max_upload_mb": hub.max_upload_mb()})
 
     async def register(request: Request):
         ip = client_ip(request)
@@ -609,10 +617,11 @@ def create_app(cfg: Config | None = None) -> Starlette:
         u = auth_user(request)
         if not u:
             return err("Нужна авторизация", 401)
-        limit = cfg.max_upload_mb * 1024 * 1024
+        mb = hub.max_upload_mb()
+        limit = mb * 1024 * 1024
         cl = request.headers.get("content-length")
         if cl and cl.isdigit() and int(cl) > limit + 64 * 1024:
-            return err(f"Файл больше {cfg.max_upload_mb} МБ", 413)
+            return err(f"Файл больше {mb} МБ", 413)
         form = await request.form(max_files=1, max_fields=5)
         f = form.get("file")
         if f is None or not hasattr(f, "read"):
@@ -630,7 +639,7 @@ def create_app(cfg: Config | None = None) -> Starlette:
                     out.write(chunk)
         except ValueError:
             path.unlink(missing_ok=True)
-            return err(f"Файл больше {cfg.max_upload_mb} МБ", 413)
+            return err(f"Файл больше {mb} МБ", 413)
         finally:
             await form.close()
         mime = f.content_type if f.content_type and f.content_type != "application/octet-stream" else None

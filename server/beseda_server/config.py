@@ -27,6 +27,8 @@ class Config:
     trusted_proxies: str = field(default_factory=lambda: _env("BESEDA_TRUSTED_PROXIES", "127.0.0.1"))
     # Адрес для клиентов — только для сообщения при запуске
     public_url: str = field(default_factory=lambda: _env("BESEDA_PUBLIC_URL", ""))
+    # Репозиторий для проверки обновлений из админки (владелец/репозиторий на GitHub)
+    update_repo: str = field(default_factory=lambda: _env("BESEDA_UPDATE_REPO", "MaxSimalist/beseda"))
 
     @property
     def files_dir(self) -> Path:

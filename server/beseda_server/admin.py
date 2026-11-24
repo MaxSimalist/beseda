@@ -5,11 +5,17 @@
 python -m beseda_server.manage make-admin ЛОГИН).
 """
 import collections
+import json
 import logging
+import os
+import re
 import secrets
+import signal
+import threading
 import time
 from pathlib import Path
 
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
@@ -352,8 +358,8 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
     async def settings_get(request):
         return JSONResponse({"registration_open": hub.reg_open(), "registration_code": hub.reg_code(),
                              "env_registration_code": cfg.registration_code,
-                             "max_upload_mb": cfg.max_upload_mb, "udp_port": cfg.udp_port,
-                             "data_dir": str(cfg.data_dir)})
+                             "max_upload_mb": hub.max_upload_mb(), "env_max_upload_mb": cfg.max_upload_mb,
+                             "udp_port": cfg.udp_port, "data_dir": str(cfg.data_dir), "version": VERSION})
 
     async def settings_set(request):
         data = await json_body(request)
@@ -362,8 +368,98 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         if "registration_code" in data:
             code = data["registration_code"]
             db.set_setting("reg_code", None if code is None else str(code).strip()[:64])
-        audit(request, "изменил настройки регистрации: открыта=%s, код=%s", hub.reg_open(),
-              "задан" if hub.reg_code() else "нет")
+        if "max_upload_mb" in data:
+            v = data["max_upload_mb"]
+            if v in (None, "", 0):                       # сброс к значению из beseda.env
+                db.set_setting("max_upload_mb", None)
+            else:
+                mb = int(v)
+                if not 1 <= mb <= 4096:
+                    return err("Размер файла: от 1 до 4096 МБ")
+                db.set_setting("max_upload_mb", mb)
+            audit(request, "изменил лимит файла: %s МБ", hub.max_upload_mb())
+        audit(request, "изменил настройки: регистрация=%s, код=%s, файл до %s МБ", hub.reg_open(),
+              "задан" if hub.reg_code() else "нет", hub.max_upload_mb())
+        return ok()
+
+    # --- обслуживание сервера: перезагрузка, обновление, резервные копии ---
+    async def server_restart(request):
+        audit(request, "перезагрузил сервер из админки")
+        # SIGTERM → uvicorn завершается → Docker (restart: unless-stopped) поднимает контейнер снова
+        threading.Timer(0.8, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        return ok(detail="Сервер перезагружается")
+
+    def _ver_tuple(text: str) -> tuple:
+        m = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(text or ""))
+        return tuple(int(x or 0) for x in m.groups()) if m else (0,)
+
+    def _watcher_status() -> dict | None:
+        try:
+            return json.loads((cfg.data_dir / "update_status.json").read_text("utf-8"))
+        except Exception:
+            return None
+
+    async def update_check(request):
+        import urllib.request
+
+        def _fetch():
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{cfg.update_repo}/releases/latest",
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "beseda-server"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode("utf-8"))
+        try:
+            rel = await run_in_threadpool(_fetch)
+        except Exception as exc:
+            return err(f"Не удалось проверить GitHub: {exc}")
+        tag = str(rel.get("tag_name", "")).lstrip("vV")
+        return JSONResponse({"current": VERSION, "latest": tag,
+                             "newer": _ver_tuple(tag) > _ver_tuple(VERSION),
+                             "notes": str(rel.get("body") or "")[:4000],
+                             "page": str(rel.get("html_url") or ""),
+                             "repo": cfg.update_repo, "watcher": _watcher_status()})
+
+    async def update_run(request):
+        (cfg.data_dir / "update_request").write_text(str(time.time()), "utf-8")
+        audit(request, "запросил обновление сервера (репозиторий %s)", cfg.update_repo)
+        return ok(detail="Запрос принят: обновлятор на сервере подхватит его в течение пары минут, "
+                         "затем сервер перезагрузится")
+
+    BACKUP_RE = re.compile(r"^beseda-\d{8}-\d{6}\.tar\.gz$")
+
+    async def backup_create(request):
+        from .manage import backup as make_backup
+        path = Path(await run_in_threadpool(make_backup, cfg))
+        audit(request, "создал резервную копию %s", path.name)
+        return ok(name=path.name, size=path.stat().st_size)
+
+    async def backup_list(request):
+        d = cfg.data_dir / "backups"
+        items = []
+        if d.exists():
+            for p in sorted(d.glob("beseda-*.tar.gz"), reverse=True)[:50]:
+                st = p.stat()
+                items.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
+        return JSONResponse({"backups": items})
+
+    def _backup_path(request) -> Path | None:
+        name = str(request.path_params["name"])
+        if not BACKUP_RE.match(name):
+            return None
+        return cfg.data_dir / "backups" / name
+
+    async def backup_download(request):
+        p = _backup_path(request)
+        if p is None or not p.exists():
+            return err("Файл не найден", 404)
+        return FileResponse(p, media_type="application/gzip", filename=p.name)
+
+    async def backup_delete(request):
+        p = _backup_path(request)
+        if p is None or not p.exists():
+            return err("Файл не найден", 404)
+        p.unlink()
+        audit(request, "удалил резервную копию %s", p.name)
         return ok()
 
     async def broadcast(request):
@@ -406,6 +502,13 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         Route(A + "/files/{fid}", guard(file_delete), methods=["DELETE"]),
         Route(A + "/settings", guard(settings_get)),
         Route(A + "/settings", guard(settings_set), methods=["POST"]),
+        Route(A + "/server/restart", guard(server_restart), methods=["POST"]),
+        Route(A + "/server/update", guard(update_check)),
+        Route(A + "/server/update", guard(update_run), methods=["POST"]),
+        Route(A + "/server/backups", guard(backup_list)),
+        Route(A + "/server/backups", guard(backup_create), methods=["POST"]),
+        Route(A + "/server/backups/{name}", guard(backup_download)),
+        Route(A + "/server/backups/{name}", guard(backup_delete), methods=["DELETE"]),
         Route(A + "/broadcast", guard(broadcast), methods=["POST"]),
         Route(A + "/logs", guard(logs)),
     ]

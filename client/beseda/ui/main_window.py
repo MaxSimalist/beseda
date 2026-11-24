@@ -56,6 +56,8 @@ class MainWindow(QMainWindow):
         self._voice_since = 0.0
         self.max_upload_mb = 50
         self._uploading = False
+        self._really_quit = False   # True — закрытие окна завершает программу (трей → «Выход»)
+        self._tray_hint = False     # подсказку «работаю в трее» показываем один раз
 
         # ---- сеть и звук ----
         self.images = ImageCache(api, self)
@@ -1080,12 +1082,24 @@ class MainWindow(QMainWindow):
             self.tray.hide()
 
     def quit_app(self):
+        self._really_quit = True
         self.close()
 
     def closeEvent(self, e):
-        self.shutdown()
-        e.accept()
-        QApplication.quit()
+        if self._really_quit or not self.tray:
+            self.shutdown()
+            e.accept()
+            QApplication.quit()
+            return
+        # закрытие окна — сворачивание в трей, программа продолжает работать
+        e.ignore()
+        self.hide()
+        if not self._tray_hint:
+            self._tray_hint = True
+            self.tray.showMessage("Беседа",
+                                  "Программа продолжает работать в трее.\n"
+                                  "Чтобы выйти совсем — меню значка → «Выход».",
+                                  QSystemTrayIcon.MessageIcon.Information, 6000)
 
 
 __all__ = ["MainWindow", "cache_dir"]

@@ -138,9 +138,33 @@
           <div class="row end"><button id="regSave" class="btn primary" type="button">Сохранить</button></div>
         </div>
         <div class="card">
+          <h3>Файлы</h3>
+          <label>Максимальный размер загружаемого файла, МБ
+            <div class="row"><input id="maxUp" type="number" min="1" max="4096" step="1" class="grow">
+            <button id="maxUpSave" class="btn primary" type="button">Сохранить</button></div>
+          </label>
+          <p class="muted small" id="maxUpEnv"></p>
+          <p class="muted small">Применяется сразу, без перезапуска. Если перед сервером стоит nginx/Caddy со своим лимитом — поправьте и его.</p>
+        </div>
+        <div class="card">
           <h3>Сервер</h3>
           <dl class="kv" id="srvInfo"></dl>
-          <p class="muted small">Эти параметры задаются в файле настроек сервера (/etc/beseda.env или .bat-файле) и меняются с перезапуском.</p>
+          <div class="row">
+            <button id="srvRestart" class="btn ghost" type="button">Перезагрузить сервер</button>
+            <button id="updCheck" class="btn ghost" type="button">Проверить обновления</button>
+          </div>
+          <div id="updBox" class="hidden">
+            <p id="updInfo"></p>
+            <pre id="updNotes" class="pre muted small hidden"></pre>
+            <div class="row end"><button id="updRun" class="btn primary hidden" type="button">Обновить сейчас</button></div>
+          </div>
+          <p class="muted small" id="watchInfo"></p>
+        </div>
+        <div class="card">
+          <h3>Резервные копии</h3>
+          <p class="muted small">Архив базы и файлов одним .tar.gz (можно создавать на работающем сервере). Хранится в папке данных, в backups.</p>
+          <div class="row"><button id="bkCreate" class="btn primary" type="button">Создать копию</button></div>
+          <ul class="list" id="bkList"></ul>
         </div>
       </div>
     </section>
