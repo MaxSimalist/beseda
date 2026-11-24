@@ -274,11 +274,42 @@ def apply(src: Path, wait_pid: int = 0, restart: bool = True, log=print) -> bool
     return True
 
 
+def _launch_apply_bat(src: Path, wait_pid: int) -> None:
+    """Установка обновления exe-версии через .bat (cmd.exe).
+
+    Запущенный exe не может перезаписать сам себя — Windows держит блокировку на
+    Beseda.exe и загруженных .dll/.pyd из _internal. Поэтому копирование выполняет
+    командный файл: ждёт выхода программы, делает резервную копию, копирует новые
+    файлы (при ошибке — откат), запускает программу и убирает за собой.
+    """
+    backup = HERE / "_backup"
+    work = Path(tempfile.mkdtemp(prefix=f"{APP_DIR}_apply_"))
+    bat = work / "apply.bat"
+    rc = "/NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1"
+    # корень временной папки загрузки (client_update_*), чтобы удалить целиком
+    dl_root = next((p for p in src.parents if p.name.startswith(f"{APP_DIR}_update_")), src.parent)
+    bat.write_text(
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        ":wait\r\n"
+        f'tasklist /FI "PID eq {wait_pid}" /NH | find "{wait_pid}" >nul\r\n'
+        "if %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
+        f'if exist "{backup}" rmdir /s /q "{backup}"\r\n'
+        f'robocopy "{HERE}" "{backup}" /E /XD "{backup}" {rc} >nul\r\n'
+        f'robocopy "{src}" "{HERE}" /E {rc} >nul\r\n'
+        f'if %errorlevel% GEQ 8 robocopy "{backup}" "{HERE}" /E {rc} >nul\r\n'
+        f'start "" "{HERE / "Beseda.exe"}"\r\n'
+        f'rmdir /s /q "{dl_root}"\r\n'
+        f'rmdir /s /q "{work}"\r\n'
+        'del "%~f0"\r\n',
+        encoding="utf-8")
+    subprocess.Popen(["cmd", "/c", str(bat)], cwd=str(work), **_no_window())
+
+
 def launch_apply(src: Path) -> None:
     """Из программы: запустить установку отдельным процессом и сразу выйти из программы."""
-    if FROZEN:                                            # exe сам умеет --apply (см. run_beseda.py)
-        subprocess.Popen([sys.executable, "--apply", str(src), str(os.getpid())],
-                         cwd=str(HERE), **_no_window())
+    if FROZEN:
+        _launch_apply_bat(src, os.getpid())
     else:
         subprocess.Popen([_venv_python(console=False), str(HERE / "updater.py"), "--apply", str(src),
                           str(os.getpid())], cwd=str(HERE), **_no_window())
@@ -288,6 +319,9 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "--apply":
         src = Path(argv[2])
         pid = int(argv[3]) if len(argv) > 3 else 0
+        if FROZEN:                                        # exe сам себя не перезапишет — через .bat
+            _launch_apply_bat(src, pid)
+            return 0
         log_path = HERE / "update.log"
 
         def log(msg):
@@ -307,6 +341,10 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "--update":
         print("Скачиваю...")
         src = download(info, lambda d, t: None)
+        if FROZEN:                                        # ставит .bat после выхода этого процесса
+            _launch_apply_bat(src, os.getpid())
+            print("Установка начнётся сразу после выхода; программа запустится сама.")
+            return 0
         ok = apply(src, 0, restart=False)
         print("Готово! Запускайте программу." if ok else "Обновление не удалось, оставлена прежняя версия.")
         return 0 if ok else 1
