@@ -27,7 +27,7 @@ from .config import Config
 from .db import DB, check_password
 from .voice import VoiceRelay
 
-VERSION = "1.0.3"
+VERSION = "1.0.5"
 log = logging.getLogger("beseda")
 
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.\-]{2,32}$")
@@ -37,7 +37,8 @@ HISTORY_LIMIT = 50
 
 # ---------------------------------------------------------------- сериализация
 def user_pub(u) -> dict:
-    return {"id": u["id"], "username": u["username"], "display_name": u["display_name"], "is_admin": bool(u["is_admin"])}
+    return {"id": u["id"], "username": u["username"], "display_name": u["display_name"],
+            "is_admin": bool(u["is_admin"]), "is_mod": bool(u["is_mod"]) if "is_mod" in u.keys() else False}
 
 
 def channel_pub(c) -> dict:

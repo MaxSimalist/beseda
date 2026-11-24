@@ -214,9 +214,9 @@ $("#loginForm").addEventListener("submit", async (e) => {
       body: JSON.stringify({ username: $("#lUser").value.trim(), password: $("#lPass").value }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Ошибка входа");
-    if (!data.user.is_admin) {
+    if (!data.user.is_admin && !data.user.is_mod) {
       fetch("/api/logout", { method: "POST", headers: { "Authorization": "Bearer " + data.token } });
-      throw new Error("У этой учётной записи нет прав администратора");
+      throw new Error("У этой учётной записи нет прав администратора или модератора");
     }
     token = data.token;
     sessionStorage.setItem(TOKEN_KEY, token);
@@ -231,7 +231,8 @@ async function start() {
   try { me = (await api("/api/admin/me")).user; } catch (e) { return; }
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#meName").textContent = me.display_name;
+  $("#meName").textContent = me.display_name + (me.is_admin ? "" : " · модератор");
+  $$("[data-admin-only]").forEach(el => el.classList.toggle("hidden", !me.is_admin));
   go(location.hash.slice(1) || "overview");
 }
 
@@ -288,7 +289,7 @@ async function loadOverview() {
     s.registration_open ? pill("открыта", "green") : pill("закрыта", "red"), " ",
     s.registration_code ? "по коду " : "без кода",
     s.registration_code ? h("code", { text: s.registration_code }) : "",
-    " · ", h("a", { href: "#settings", text: "изменить" }));
+    me && me.is_admin ? h("span", {}, " · ", h("a", { href: "#settings", text: "изменить" })) : null);
 }
 function drawChart(perDay) {
   const box = clear($("#chart"));
@@ -352,9 +353,13 @@ function renderUsers() {
     if (u.online) st.push(pill("в сети", "green"));
     if (u.voice_channel) st.push(pill("в голосе", "blue"));
     if (u.is_admin) st.push(pill("админ", "yellow"));
+    else if (u.is_mod) st.push(pill("модератор", "blue"));
     if (u.banned) st.push(pill("заблокирован", "red"));
     if (!st.length) st.push(h("span", { class: "muted", text: "не в сети" }));
     const self = me && u.id === me.id;
+    const adminMe = me && me.is_admin;
+    const staff = u.is_admin || u.is_mod;
+    const canAct = adminMe || !staff;          // модератор действует только на обычных пользователей
     tb.append(h("tr", {},
       h("td", {}, userCell(u.display_name, u.username, u.id)),
       h("td", {}, st),
@@ -363,14 +368,16 @@ function renderUsers() {
       h("td", { class: "num", text: u.bytes ? size(u.bytes) : "—" }),
       h("td", { class: "muted", text: u.online ? "сейчас" : ago(u.last_seen), title: dt(u.last_seen) }),
       h("td", { class: "actions" }, menuButton([
-        { label: "Переименовать…", run: () => renameUser(u) },
-        { label: "Сбросить пароль…", run: () => resetPassword(u) },
-        { label: "Завершить все сеансы", run: () => userAct(u, { action: "logout_all" }, "Сеансы завершены") },
+        canAct ? { label: "Переименовать…", run: () => renameUser(u) } : null,
+        adminMe ? { label: "Сбросить пароль…", run: () => resetPassword(u) } : null,
+        canAct ? { label: "Завершить все сеансы", run: () => userAct(u, { action: "logout_all" }, "Сеансы завершены") } : null,
         { label: "Найти сообщения", run: () => { $("#msgUser").value = u.id; go("messages"); searchMessages({ user_id: u.id }); } },
         "-",
-        self ? null : { label: u.is_admin ? "Снять права администратора" : "Сделать администратором",
-          run: () => userAct(u, { action: "set_admin", value: !u.is_admin }, u.is_admin ? "Права сняты" : "Теперь администратор") },
-        self ? null : { label: u.banned ? "Разблокировать" : "Заблокировать…", danger: !u.banned, run: () => banUser(u) },
+        adminMe && !u.is_admin ? { label: u.is_mod ? "Снять права модератора" : "Сделать модератором",
+          run: () => userAct(u, { action: "set_mod", value: !u.is_mod }, u.is_mod ? "Права модератора сняты" : "Теперь модератор") } : null,
+        adminMe && !self ? { label: u.is_admin ? "Снять права администратора" : "Сделать администратором",
+          run: () => userAct(u, { action: "set_admin", value: !u.is_admin }, u.is_admin ? "Права сняты" : "Теперь администратор") } : null,
+        canAct && !self ? { label: u.banned ? "Разблокировать" : "Заблокировать…", danger: !u.banned, run: () => banUser(u) } : null,
       ])),
     ));
   }
@@ -445,24 +452,24 @@ async function openGuild(id) {
   box.append(h("div", { class: "detail-head" },
     h("h2", { text: g.name }),
     h("div", { class: "row" },
-      h("button", { class: "btn ghost", type: "button", text: "Переименовать", onclick: async () => {
+      me.is_admin ? h("button", { class: "btn ghost", type: "button", text: "Переименовать", onclick: async () => {
         const v = await ask({ title: "Название сервера", fields: [{ name: "n", label: "Название", value: g.name, max: 64 }] });
         if (v && v.n.trim()) gAct({ action: "rename", name: v.n.trim() }, "Переименован");
-      } }),
-      h("button", { class: "btn ghost", type: "button", text: "Новый код приглашения", onclick: () => gAct({ action: "regen_invite" }, "Код обновлён") }),
-      h("button", { class: "btn danger", type: "button", text: "Удалить сервер", onclick: async () => {
+      } }) : null,
+      me.is_admin ? h("button", { class: "btn ghost", type: "button", text: "Новый код приглашения", onclick: () => gAct({ action: "regen_invite" }, "Код обновлён") }) : null,
+      me.is_admin ? h("button", { class: "btn danger", type: "button", text: "Удалить сервер", onclick: async () => {
         const v = await ask({ title: "Удалить «" + g.name + "»?", danger: true, ok: "Удалить навсегда",
           text: "Будут удалены все каналы, сообщения и файлы. Отменить нельзя.\nДля подтверждения введите название сервера.",
           fields: [{ name: "n", label: "Название" }], validate: x => x.n.trim() === g.name ? "" : "Название не совпадает" });
         if (v) { selectedGuild = null; gAct({ action: "delete" }, "Сервер удалён"); }
-      } }))));
+      } }) : null)));
 
   const chans = h("ul", { class: "list" });
   for (const c of d.channels) {
     chans.append(h("li", {},
       h("div", {}, h("b", { text: (c.kind === "text" ? "# " : "🔊 ") + c.name }), " ",
         h("span", { class: "muted small", text: c.kind === "text" ? num(c.messages) + " сообщ." : (c.voice.length ? "сейчас: " + c.voice.map(u => names[u] || u).join(", ") : "пусто") })),
-      menuButton([
+      me.is_admin ? menuButton([
         { label: "Переименовать…", run: async () => {
           const v = await ask({ title: "Название канала", fields: [{ name: "n", label: "Название", value: c.name, max: 48 }] });
           if (v && v.n.trim()) { await act("/api/admin/channels/" + c.id, { action: "rename", name: v.n.trim() }, "Готово"); openGuild(g.id); }
@@ -470,7 +477,7 @@ async function openGuild(id) {
         { label: "Удалить канал…", danger: true, run: async () => {
           const v = await ask({ title: "Удалить канал «" + c.name + "»?", danger: true, ok: "Удалить", text: "Вся история канала будет удалена." });
           if (v) { await act("/api/admin/channels/" + c.id, { action: "delete" }, "Канал удалён"); loadGuilds(); }
-        } }])));
+        } }] ) : null));
   }
   const mem = h("ul", { class: "list" });
   for (const m of d.members) {
@@ -478,10 +485,10 @@ async function openGuild(id) {
     mem.append(h("li", {}, userCell(m.display_name, m.username, m.id),
       h("div", { class: "row" }, owner ? pill("владелец", "yellow") : null, m.online ? pill("в сети", "green") : null,
         owner ? null : menuButton([
-          { label: "Сделать владельцем", run: async () => {
+          me.is_admin ? { label: "Сделать владельцем", run: async () => {
             const v = await ask({ title: "Передать сервер?", text: m.display_name + " станет владельцем «" + g.name + "».", ok: "Передать" });
             if (v) gAct({ action: "transfer", user_id: m.id }, "Владелец изменён");
-          } },
+          } } : null,
           { label: "Выгнать с сервера", danger: true, run: async () => {
             const v = await ask({ title: "Выгнать " + m.display_name + "?", danger: true, ok: "Выгнать",
               text: "Он сможет вернуться по коду приглашения. Чтобы не смог — смените код." });

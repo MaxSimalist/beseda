@@ -34,7 +34,7 @@
       <a data-page="voice">Голос <span id="voiceBadge" class="pill hidden"></span></a>
       <a data-page="messages">Сообщения</a>
       <a data-page="files">Файлы</a>
-      <a data-page="settings">Настройки</a>
+      <a data-page="settings" data-admin-only>Настройки</a>
       <a data-page="logs">Журнал</a>
     </nav>
     <div class="me">
@@ -56,8 +56,8 @@
         <div class="card">
           <h3>Объявление всем в сети</h3>
           <p class="muted">Появится у каждого, кто сейчас подключён.</p>
-          <textarea id="bcText" rows="3" maxlength="500" placeholder="Например: в 23:00 сервер перезапустится на 5 минут"></textarea>
-          <div class="row end"><button id="bcSend" class="btn primary" type="button">Отправить</button></div>
+          <textarea id="bcText" rows="3" maxlength="500" placeholder="Например: в 23:00 сервер перезапустится на 5 минут" data-admin-only></textarea>
+          <div class="row end" data-admin-only><button id="bcSend" class="btn primary" type="button">Отправить</button></div>
           <h3 class="mt">Регистрация</h3>
           <p id="regInfo"></p>
         </div>
@@ -70,7 +70,7 @@
         <h2>Пользователи</h2>
         <div class="row">
           <input id="userFilter" class="search" placeholder="Поиск по логину или имени">
-          <button id="userNew" class="btn primary" type="button">Создать</button>
+          <button id="userNew" class="btn primary" type="button" data-admin-only>Создать</button>
         </div>
       </header>
       <div class="card flush"><table class="table" id="usersTable">

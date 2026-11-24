@@ -67,12 +67,14 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
     started = time.time()
     ring = ring_log()
 
-    def guard(handler):
+    def guard(handler, mod: bool = False):
+        """mod=True — доступ и модераторам; иначе только администраторам."""
         async def wrapped(request: Request):
             u = auth_user(request)
             if not u:
                 return err("Нужна авторизация", 401)
-            if not u["is_admin"]:
+            is_mod_ok = mod and "is_mod" in u.keys() and u["is_mod"]
+            if not u["is_admin"] and not is_mod_ok:
                 return err("Только для администраторов", 403)
             request.state.admin = u
             try:
@@ -134,12 +136,29 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         data = await json_body(request)
         act = data.get("action")
         me = request.state.admin
+        if not me["is_admin"]:
+            # модератор: только простые действия и только над обычными пользователями
+            if act not in ("ban", "logout_all", "rename"):
+                return err("Это действие доступно только администраторам", 403)
+            if u["is_admin"] or ("is_mod" in u.keys() and u["is_mod"]):
+                return err("Модератор не может применять действия к администраторам и модераторам", 403)
         if act == "set_admin":
             on = bool(data.get("value"))
             if not on and u["is_admin"] and db.admin_count() <= 1:
                 return err("Нельзя снять права с последнего администратора")
             db.set_admin(uid, on)
+            if on:
+                db.set_mod(uid, False)               # админу модераторство не нужно
             audit(request, "%s права администратора: %s", "выдал" if on else "снял", u["username"])
+            hub.to_users(db.users_sharing_guild(uid) or [uid],
+                         {"type": "user_update", "user": hub.user_with_presence(db.user(uid))})
+            return ok()
+        if act == "set_mod":
+            on = bool(data.get("value"))
+            if u["is_admin"]:
+                return err("Администратору права модератора не нужны")
+            db.set_mod(uid, on)
+            audit(request, "%s права модератора: %s", "выдал" if on else "снял", u["username"])
             hub.to_users(db.users_sharing_guild(uid) or [uid],
                          {"type": "user_update", "user": hub.user_with_presence(db.user(uid))})
             return ok()
@@ -224,6 +243,8 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
             return err("Сервер не найден", 404)
         data = await json_body(request)
         act = data.get("action")
+        if not request.state.admin["is_admin"] and act != "kick":
+            return err("Модератору доступно только исключение участников", 403)
         if act == "rename":
             name = str(data.get("name") or "").strip()[:64]
             if not name:
@@ -484,22 +505,22 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         Route("/admin/", static("index.html", "text/html; charset=utf-8")),
         Route("/admin/admin.js", static("admin.js", "text/javascript; charset=utf-8")),
         Route("/admin/admin.css", static("admin.css", "text/css; charset=utf-8")),
-        Route(A + "/me", guard(whoami)),
-        Route(A + "/stats", guard(stats)),
-        Route(A + "/users", guard(users)),
+        Route(A + "/me", guard(whoami, mod=True)),
+        Route(A + "/stats", guard(stats, mod=True)),
+        Route(A + "/users", guard(users, mod=True)),
         Route(A + "/users", guard(user_create), methods=["POST"]),
-        Route(A + "/users/{uid:int}", guard(user_action), methods=["POST"]),
-        Route(A + "/guilds", guard(guilds)),
-        Route(A + "/guilds/{gid:int}", guard(guild_detail)),
-        Route(A + "/guilds/{gid:int}", guard(guild_action), methods=["POST"]),
+        Route(A + "/users/{uid:int}", guard(user_action, mod=True), methods=["POST"]),
+        Route(A + "/guilds", guard(guilds, mod=True)),
+        Route(A + "/guilds/{gid:int}", guard(guild_detail, mod=True)),
+        Route(A + "/guilds/{gid:int}", guard(guild_action, mod=True), methods=["POST"]),
         Route(A + "/channels/{cid:int}", guard(channel_action), methods=["POST"]),
-        Route(A + "/voice", guard(voice)),
-        Route(A + "/voice/kick", guard(voice_kick), methods=["POST"]),
-        Route(A + "/messages", guard(messages)),
-        Route(A + "/messages/{mid:int}", guard(message_delete), methods=["DELETE"]),
-        Route(A + "/files", guard(files)),
-        Route(A + "/files/cleanup", guard(files_cleanup), methods=["POST"]),
-        Route(A + "/files/{fid}", guard(file_delete), methods=["DELETE"]),
+        Route(A + "/voice", guard(voice, mod=True)),
+        Route(A + "/voice/kick", guard(voice_kick, mod=True), methods=["POST"]),
+        Route(A + "/messages", guard(messages, mod=True)),
+        Route(A + "/messages/{mid:int}", guard(message_delete, mod=True), methods=["DELETE"]),
+        Route(A + "/files", guard(files, mod=True)),
+        Route(A + "/files/cleanup", guard(files_cleanup, mod=True), methods=["POST"]),
+        Route(A + "/files/{fid}", guard(file_delete, mod=True), methods=["DELETE"]),
         Route(A + "/settings", guard(settings_get)),
         Route(A + "/settings", guard(settings_set), methods=["POST"]),
         Route(A + "/server/restart", guard(server_restart), methods=["POST"]),
@@ -510,5 +531,5 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
         Route(A + "/server/backups/{name}", guard(backup_download)),
         Route(A + "/server/backups/{name}", guard(backup_delete), methods=["DELETE"]),
         Route(A + "/broadcast", guard(broadcast), methods=["POST"]),
-        Route(A + "/logs", guard(logs)),
+        Route(A + "/logs", guard(logs, mod=True)),
     ]

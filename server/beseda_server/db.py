@@ -105,6 +105,8 @@ class DB:
             self.conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
         if "last_seen" not in cols:
             self.conn.execute("ALTER TABLE users ADD COLUMN last_seen REAL")
+        if "is_mod" not in cols:
+            self.conn.execute("ALTER TABLE users ADD COLUMN is_mod INTEGER NOT NULL DEFAULT 0")
         self.conn.execute("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)")
 
     # --- настройки, изменяемые из админки ---
@@ -181,13 +183,16 @@ class DB:
     def set_admin(self, user_id: int, admin: bool):
         self.ex("UPDATE users SET is_admin=? WHERE id=?", (1 if admin else 0, user_id))
 
+    def set_mod(self, user_id: int, mod: bool):
+        self.ex("UPDATE users SET is_mod=? WHERE id=?", (1 if mod else 0, user_id))
+
     def admin_count(self) -> int:
         return self.q1("SELECT COUNT(*) FROM users WHERE is_admin=1 AND banned=0")[0]
 
     # --- выборки для админки ---
     def admin_users(self):
         return self.q("""
-            SELECT u.id, u.username, u.display_name, u.created, u.is_admin, u.banned, u.last_seen,
+            SELECT u.id, u.username, u.display_name, u.created, u.is_admin, u.is_mod, u.banned, u.last_seen,
                    (SELECT COUNT(*) FROM members m WHERE m.user_id=u.id) AS guilds,
                    (SELECT COUNT(*) FROM messages x WHERE x.user_id=u.id) AS messages,
                    (SELECT COALESCE(SUM(size),0) FROM files f WHERE f.user_id=u.id) AS bytes

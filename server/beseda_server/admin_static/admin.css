@@ -40,7 +40,7 @@ label > input, label > .row { margin-top: 6px; text-transform: none; letter-spac
 .btn.wide { width: 100%; padding: 10px; }
 .btn:disabled { opacity: .5; cursor: default; }
 
-.row { display: flex; gap: 8px; align-items: center; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; margin-top: 12px; }
 .grow { flex: 1; }
 
@@ -126,7 +126,7 @@ code { background: var(--bg0); padding: 2px 6px; border-radius: 4px; font-family
 .detail { margin-top: 16px; }
 .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 .list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #26272b; }
+.list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #26272b; flex-wrap: wrap; }
 .list li:last-child { border-bottom: 0; }
 
 /* сообщения */
