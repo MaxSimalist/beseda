@@ -39,7 +39,8 @@ from typing import Optional
 
 from version import APP_DIR, APP_NAME, REPO, VERSION
 
-HERE = Path(__file__).resolve().parent
+FROZEN = bool(getattr(sys, "frozen", False))   # True в сборке PyInstaller (Beseda.exe)
+HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 API = "https://api.github.com"
 KEEP = {".venv", "_backup", "__pycache__", ".git", "dist", "build"}  # это при обновлении не трогаем
 TIMEOUT = 15
@@ -145,6 +146,9 @@ def _from_branch(repo: str, branch: str = "main") -> UpdateInfo:
 
 def download(info: UpdateInfo, progress=None) -> Path:
     """Скачать и распаковать во временную папку. Возвращает папку с файлами программы."""
+    if FROZEN and not info.asset:
+        raise RuntimeError(f"в релизе нет архива {APP_DIR}-*.zip для exe-версии — "
+                           f"скачайте обновление со страницы {info.page}")
     work = Path(tempfile.mkdtemp(prefix=f"{APP_DIR}_update_"))
     zpath = work / "update.zip"
     # архив релиза (github.com) — как файл; архив исходников (api.github.com/zipball) понимает только
@@ -175,9 +179,15 @@ def download(info: UpdateInfo, progress=None) -> Path:
 
 
 def find_app_dir(root: Path) -> Optional[Path]:
-    """Папка программы в распакованном архиве: <root>/<APP_DIR>, <root>/*/<APP_DIR> или сам root."""
-    for cand in [root / APP_DIR] + [p / APP_DIR for p in root.iterdir() if p.is_dir()] + [root]:
-        if (cand / "run_beseda.py").exists() and (cand / "version.py").exists():
+    """Папка программы в распакованном архиве: <root>/<APP_DIR>, <root>/*/<APP_DIR> или сам root.
+    Для exe-версии ищем папку с Beseda.exe, для исходников — с run_beseda.py + version.py."""
+    def is_app(cand: Path) -> bool:
+        if FROZEN:
+            return (cand / "Beseda.exe").exists()
+        return (cand / "run_beseda.py").exists() and (cand / "version.py").exists()
+    for cand in [root / APP_DIR] + [p / APP_DIR for p in root.iterdir() if p.is_dir()] \
+            + [root] + [p for p in root.iterdir() if p.is_dir()]:
+        if is_app(cand):
             return cand
     return None
 
@@ -247,7 +257,7 @@ def apply(src: Path, wait_pid: int = 0, restart: bool = True, log=print) -> bool
         copy_tree(backup, HERE)
         return False
     req = HERE / "requirements.txt"
-    if req.exists():
+    if req.exists() and not FROZEN:
         log("Обновляю библиотеки...")
         subprocess.run([_venv_python(), "-m", "pip", "install", "-r", str(req), "-q",
                         "--disable-pip-version-check"], **_no_window())
@@ -256,15 +266,22 @@ def apply(src: Path, wait_pid: int = 0, restart: bool = True, log=print) -> bool
             shutil.rmtree(parent, ignore_errors=True)
             break
     if restart:
-        subprocess.Popen([_venv_python(console=False), str(HERE / "run_beseda.py")], cwd=str(HERE),
-                         **_no_window())
+        if FROZEN:
+            subprocess.Popen([str(HERE / "Beseda.exe")], cwd=str(HERE), **_no_window())
+        else:
+            subprocess.Popen([_venv_python(console=False), str(HERE / "run_beseda.py")], cwd=str(HERE),
+                             **_no_window())
     return True
 
 
 def launch_apply(src: Path) -> None:
     """Из программы: запустить установку отдельным процессом и сразу выйти из программы."""
-    subprocess.Popen([_venv_python(console=False), str(HERE / "updater.py"), "--apply", str(src),
-                      str(os.getpid())], cwd=str(HERE), **_no_window())
+    if FROZEN:                                            # exe сам умеет --apply (см. run_beseda.py)
+        subprocess.Popen([sys.executable, "--apply", str(src), str(os.getpid())],
+                         cwd=str(HERE), **_no_window())
+    else:
+        subprocess.Popen([_venv_python(console=False), str(HERE / "updater.py"), "--apply", str(src),
+                          str(os.getpid())], cwd=str(HERE), **_no_window())
 
 
 def main(argv: list[str]) -> int:
