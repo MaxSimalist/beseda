@@ -1,0 +1,25 @@
+# Caddyfile для домена с сертификатом Let's Encrypt через Cloudflare DNS-01.
+# Когда порты 80/443 заняты (например, видеорегистратором), обычный HTTP-01
+# невозможен — Caddy доказывает владение доменом TXT-записью через API Cloudflare.
+#
+# Настройка:
+#   1. Делегируйте домен на NS Cloudflare (в панели регистратора) и создайте
+#      A-запись домена на IP сервера (режим «DNS only», серое облако!).
+#   2. Создайте API-токен: Cloudflare → My Profile → API Tokens →
+#      шаблон «Edit zone DNS» → Zone: ваш домен. Впишите его в .env:
+#      CF_API_TOKEN=...
+#   3. В docker-compose.yml у службы caddy замените image: caddy:2 на
+#      build: { context: ., dockerfile: deploy/Dockerfile.caddy }
+#      и добавьте в environment: CF_API_TOKEN: ${CF_API_TOKEN:-}
+#   4. Замените домен ниже на свой и перезапустите: ./bctl update
+{
+    http_port 8080
+    https_port 8443
+}
+
+spark-beseda.ru {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+    reverse_proxy beseda:8765
+}

@@ -1,0 +1,8 @@
+# Caddy с плагином Cloudflare DNS — для получения сертификата Let's Encrypt
+# через DNS-01 (когда порты 80/443 недоступны извне, например заняты другим
+# устройством). Используется вместе с Caddyfile.cloudflare.
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
