@@ -27,7 +27,7 @@ from .config import Config
 from .db import DB, check_password
 from .voice import VoiceRelay
 
-VERSION = "1.0.6"
+VERSION = "1.1.0"
 log = logging.getLogger("beseda")
 
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.\-]{2,32}$")
@@ -135,7 +135,7 @@ class Hub:
             return None
         ch = self.db.channel(s.channel_id)
         return {"user_id": uid, "channel_id": s.channel_id, "guild_id": ch["guild_id"] if ch else None,
-                "mute": s.self_mute, "deaf": s.self_deaf}
+                "mute": s.self_mute, "deaf": s.self_deaf, "streaming": bool(s.streaming)}
 
     def guild_payload(self, g) -> dict:
         return {
@@ -381,6 +381,34 @@ class Hub:
             s.self_mute = bool(msg.get("mute"))
             s.self_deaf = bool(msg.get("deaf"))
             self.broadcast_voice_state(conn.user_id)
+
+    def op_voice_stream(self, conn, msg):
+        """Начал/закончил демонстрацию экрана — сообщаем всему серверу."""
+        if self.voice_conn.get(conn.user_id) is not conn or conn.voice_ssrc is None:
+            return None
+        s = self.relay.by_ssrc.get(conn.voice_ssrc)
+        if not s:
+            return None
+        s.streaming = bool(msg.get("streaming"))
+        if not s.streaming:
+            for o in self.relay.by_ssrc.values():
+                o.watch.discard(s.ssrc)
+        self.broadcast_voice_state(conn.user_id)
+
+    def op_video_watch(self, conn, msg):
+        """Подписка на чужую трансляцию (или отписка)."""
+        if self.voice_conn.get(conn.user_id) is not conn or conn.voice_ssrc is None:
+            raise ApiError("Сначала подключитесь к голосовому каналу")
+        me = self.relay.by_ssrc.get(conn.voice_ssrc)
+        target_uid = int(msg.get("user_id") or 0)
+        tconn = self.voice_conn.get(target_uid)
+        ts = self.relay.by_ssrc.get(tconn.voice_ssrc) if tconn and tconn.voice_ssrc else None
+        if not me or not ts or ts.channel_id != me.channel_id:
+            raise ApiError("Этот пользователь не в вашем голосовом канале")
+        if msg.get("watch"):
+            me.watch.add(ts.ssrc)
+        else:
+            me.watch.discard(ts.ssrc)
 
     # серверы
     def op_guild_create(self, conn, msg):

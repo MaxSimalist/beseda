@@ -3,3 +3,6 @@ sounddevice>=0.4.6
 numpy>=1.24
 requests>=2.31
 cryptography>=42
+av>=14
+mss>=9
+pillow>=10

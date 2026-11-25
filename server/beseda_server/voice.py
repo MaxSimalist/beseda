@@ -5,11 +5,19 @@
 
 Формат пакета клиент -> сервер:
     ssrc:u32 | counter:u64 | AEAD(plain, nonce=b"C\\0\\0\\0"+counter, aad=ssrc)
-    plain: kind:u8 (0=hello/keepalive, 1=audio) [| codec:u8 | seq:u16 | payload]
+    plain: kind:u8 (0=hello/keepalive, 1=audio, 2=video)
+      audio: codec:u8 | seq:u16 | payload
+      video: frame:u16 | idx:u8 | cnt:u8 | key:u8 | chunk   (кадр H.264, нарезанный на части)
 
 Формат пакета сервер -> клиент:
     counter:u64 | AEAD(plain, nonce=b"S\\0\\0\\0"+counter, aad=b"")
-    plain: kind:u8 (0=hello-ack, 1=audio) [| speaker:u32 | codec:u8 | seq:u16 | payload]
+    plain: kind:u8 (0=hello-ack, 1=audio, 2=video)
+      audio: speaker:u32 | codec:u8 | seq:u16 | payload
+      video: speaker:u32 | frame:u16 | idx:u8 | cnt:u8 | key:u8 | chunk
+
+Видео (демонстрация экрана) пересылается только тем участникам канала, которые
+подписались на трансляцию (session.watch), — чтобы не грузить канал зрителей,
+которым трансляция не нужна.
 
 Шифр ChaCha20-Poly1305, ключ — свой у каждой голосовой сессии, выдаётся по
 WebSocket (то есть внутри TLS).
@@ -28,6 +36,7 @@ log = logging.getLogger("beseda.voice")
 MAX_PACKET = 1400
 KIND_HELLO = 0
 KIND_AUDIO = 1
+KIND_VIDEO = 2
 
 
 @dataclass
@@ -42,6 +51,8 @@ class VoiceSession:
     tx_counter: int = 0
     self_mute: bool = False
     self_deaf: bool = False
+    streaming: bool = False          # идёт ли демонстрация экрана
+    watch: set = field(default_factory=set)   # ssrc трансляций, которые смотрим
 
     def __post_init__(self):
         self.aead = ChaCha20Poly1305(self.key)
@@ -77,6 +88,8 @@ class VoiceRelay(asyncio.DatagramProtocol):
                 members.discard(ssrc)
                 if not members:
                     self.by_channel.pop(s.channel_id, None)
+            for o in self.by_ssrc.values():      # никто не должен смотреть ушедшую трансляцию
+                o.watch.discard(ssrc)
 
     def close_channel(self, channel_id: int) -> list[VoiceSession]:
         out = [self.by_ssrc[x] for x in list(self.by_channel.get(channel_id, ())) if x in self.by_ssrc]
@@ -106,6 +119,16 @@ class VoiceRelay(asyncio.DatagramProtocol):
         kind = plain[0]
         if kind == KIND_HELLO:
             self._send(s, bytes([KIND_HELLO]))
+            return
+        if kind == KIND_VIDEO and len(plain) >= 6:
+            if s.self_deaf:
+                return
+            s.streaming = True               # первый видеопакет = трансляция идёт
+            out = bytes([KIND_VIDEO]) + struct.pack(">I", s.user_id) + plain[1:]
+            for other_ssrc in self.by_channel.get(s.channel_id, ()):
+                o = self.by_ssrc.get(other_ssrc)
+                if o and o.addr and not o.self_deaf and ssrc in o.watch:
+                    self._send(o, out)
             return
         if kind != KIND_AUDIO or len(plain) < 4 or s.self_mute:
             return

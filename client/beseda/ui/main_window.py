@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QInputDia
 from ..api import Api, run_bg
 from ..gateway import Gateway
 from ..voice import VoiceEngine
+from .. import screen
 from .chat import ChatPanel, ImageCache, cache_dir, open_local
 from .settings import SettingsDialog, apply_audio_settings
 from .style import GREEN, MUTED, app_icon, avatar_pixmap, initials
+from .video import VideoPanel
 from gui_update import UpdateButton
 
 ROLE = Qt.UserRole
@@ -27,6 +29,7 @@ IS_WIN = sys.platform == "win32"
 class MainWindow(QMainWindow):
     logged_out = Signal()
     auth_failed = Signal(str)
+    cast_failed = Signal(str)
 
     def __init__(self, api: Api, settings):
         super().__init__()
@@ -179,6 +182,12 @@ class MainWindow(QMainWindow):
         hang.setToolTip("Отключиться от голоса")
         hang.setStyleSheet("color: #da373c;")
         hang.clicked.connect(self.leave_voice)
+        self.screen_btn = QPushButton("🖥")
+        self.screen_btn.setObjectName("iconBtn")
+        self.screen_btn.setToolTip("Демонстрация экрана")
+        self.screen_btn.setCheckable(True)
+        self.screen_btn.clicked.connect(self._toggle_cast)
+        vl.addWidget(self.screen_btn)
         vl.addWidget(hang)
         self.vpanel.hide()
         sl.addWidget(self.vpanel)
@@ -229,8 +238,9 @@ class MainWindow(QMainWindow):
 
         h.addWidget(side)
 
-        # --- чат ---
+        # --- чат + панель трансляции ---
         self.chat = ChatPanel(self.images)
+        self.chat.composer.settings = self.s
         v = self.chat.view
         v.load_more.connect(self._load_more)
         v.action.connect(self._msg_action)
@@ -239,7 +249,18 @@ class MainWindow(QMainWindow):
         self.chat.composer.send.connect(self._send)
         self.chat.composer.typing.connect(
             lambda: self.cur_channel and self.gw.send({"type": "typing", "channel_id": self.cur_channel}))
-        h.addWidget(self.chat, 1)
+        self.video_panel = VideoPanel()
+        self.video_panel.hide()
+        self.video_panel.closed.connect(self._watch_stopped)
+        self.engine.on_video_frame = lambda uid, data, key: self.video_panel.feed(uid, data, key)
+        self.cast_failed.connect(self._cast_failed)
+        center = QWidget()
+        cl = QVBoxLayout(center)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self.video_panel)
+        cl.addWidget(self.chat, 1)
+        h.addWidget(center, 1)
 
         # --- участники ---
         mp = QWidget()
@@ -486,6 +507,9 @@ class MainWindow(QMainWindow):
             self.voice[uid] = ev
         else:
             self.voice.pop(uid, None)
+        if uid != self.me.get("id") and self.video_panel.uid == uid and not ev.get("streaming"):
+            self.video_panel.stop()
+            self.flash(f"{self._uname(uid)} завершил трансляцию")
         mine = self.want_voice
         if uid != self.me.get("id") and mine and self.engine.in_voice:
             was_here = old and old.get("channel_id") == mine
@@ -653,7 +677,7 @@ class MainWindow(QMainWindow):
                     for uid, st in sorted(self.voice.items(), key=lambda kv: self._uname(kv[0]).lower()):
                         if st.get("channel_id") != c["id"]:
                             continue
-                        flags = (" 🔇" if st.get("mute") and not st.get("deaf") else "") + (" 🔕" if st.get("deaf") else "")
+                        flags = (" 🔇" if st.get("mute") and not st.get("deaf") else "") + (" 🔕" if st.get("deaf") else "") + (" 🖥" if st.get("streaming") else "")
                         u = QTreeWidgetItem([self._uname(uid) + flags])
                         u.setData(0, ROLE, ("user", uid))
                         u.setIcon(0, QIcon(avatar_pixmap(self._uname(uid), 20, key=str(uid))))
@@ -770,6 +794,11 @@ class MainWindow(QMainWindow):
             self.open_channel(ident)
         elif kind == "voice":
             self.join_voice(ident)
+        elif kind == "user":
+            st = self.voice.get(ident)
+            if (ident != self.me.get("id") and st and st.get("streaming")
+                    and st.get("channel_id") == self.want_voice):
+                self._watch_user(ident)
 
     def _tree_menu(self, pos):
         item = self.tree.itemAt(pos)
@@ -885,6 +914,9 @@ class MainWindow(QMainWindow):
     def _user_actions(self, m: QMenu, uid: int):
         u = self.users.get(uid, {})
         if uid != self.me.get("id"):
+            st = self.voice.get(uid)
+            if st and st.get("streaming") and st.get("channel_id") == self.want_voice:
+                m.addAction("🖥 Смотреть трансляцию", lambda: self._watch_user(uid))
             m.addAction("Упомянуть", lambda: self.chat.composer.insert_text(f"@{u.get('display_name', '')} "))
             # громкость конкретного человека (как фейдер на пульте)
             w = QWidget()
@@ -1029,10 +1061,75 @@ class MainWindow(QMainWindow):
 
     def _voice_gone(self):
         self.want_voice = None
+        self.engine.stop_cast()
+        self.screen_btn.setChecked(False)
+        self.screen_btn.setStyleSheet("")
+        if self.video_panel.uid:
+            self.video_panel.stop()
         self.engine.disconnect()
         self.engine.stop_audio()
         self._render_voice_panel()
         self._render_tree()
+
+    # ================================================================ демонстрация экрана
+    def _toggle_cast(self):
+        if self.engine.caster and self.engine.caster.running:
+            self._stop_cast()
+            self.flash("Трансляция остановлена")
+            return
+        self.screen_btn.setChecked(False)
+        if not self.engine.in_voice:
+            self.flash("Сначала подключитесь к голосовому каналу", error=True)
+            return
+        if not screen.available():
+            self.flash("Трансляция недоступна: не установлен пакет av", error=True)
+            return
+        mons = screen.list_monitors()
+        if not mons:
+            self.flash("Не удалось найти мониторы", error=True)
+            return
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        for idx, label in mons:
+            menu.addAction(label, lambda i=idx: self._start_cast(i))
+        menu.exec(QCursor.pos())
+
+    def _start_cast(self, monitor: int):
+        fps = int(self.s.value("cast/fps", 15) or 15)
+        bitrate = int(self.s.value("cast/bitrate", 2_000_000) or 2_000_000)
+        if self.engine.start_cast(monitor, fps, bitrate,
+                                  on_error=lambda m: self.cast_failed.emit(m)):
+            self.gw.send({"type": "voice_stream", "streaming": True})
+            self.screen_btn.setChecked(True)
+            self.screen_btn.setStyleSheet("color: #f0b232;")
+            self.flash("Демонстрация экрана началась — участники канала видят кнопку просмотра")
+        else:
+            self.flash("Не удалось начать трансляцию", error=True)
+
+    def _cast_failed(self, msg: str):
+        self._stop_cast()
+        self.flash(f"Трансляция прервана: {msg}", error=True)
+
+    def _stop_cast(self):
+        if self.engine.caster:
+            self.engine.stop_cast()
+            if self.gw.is_online:
+                self.gw.send({"type": "voice_stream", "streaming": False})
+        self.screen_btn.setChecked(False)
+        self.screen_btn.setStyleSheet("")
+
+    def _watch_user(self, uid: int):
+        st = self.voice.get(uid)
+        if not st or not st.get("streaming"):
+            self.flash("Этот пользователь сейчас не транслирует", error=True)
+            return
+        self.video_panel.set_source(uid, self._uname(uid))
+        self.video_panel.show()
+        self.gw.send({"type": "video_watch", "user_id": uid, "watch": True})
+
+    def _watch_stopped(self, uid: int):
+        if uid and self.gw.is_online:
+            self.gw.send({"type": "video_watch", "user_id": uid, "watch": False})
 
     def toggle_mute(self):
         if self.self_deaf:

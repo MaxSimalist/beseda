@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtGui import QDesktopServices, QImage, QMovie, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton,
                                QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
@@ -70,6 +70,31 @@ class ImageCache(QObject):
 
         run_bg(load, on_done=done, on_fail=lambda e: self.waiting.pop(fid, None))
 
+    def get_path(self, fid: str, name: str, callback):
+        """Гарантировать, что файл скачан, и вернуть его путь (для GIF-анимации)."""
+        p = self.path(fid, name)
+        if p.exists():
+            callback(p)
+            return
+        key = f"path:{fid}"
+        if key in self.waiting:
+            self.waiting[key].append(callback)
+            return
+        self.waiting[key] = [callback]
+
+        def done(_):
+            for cb in self.waiting.pop(key, []):
+                try:
+                    cb(p)
+                except RuntimeError:
+                    pass
+
+        def load():
+            p.write_bytes(self.api.fetch(fid))
+            return True
+
+        run_bg(load, on_done=done, on_fail=lambda e: self.waiting.pop(key, None))
+
 
 class ClickLabel(QLabel):
     clicked = Signal()
@@ -129,6 +154,8 @@ class MessageWidget(QWidget):
         row.addLayout(col, 1)
 
     def _attachment(self, att: dict) -> QWidget:
+        if att["mime"] == "image/gif" and att["size"] < 25 * 1024 * 1024:
+            return self._gif_attachment(att)
         if att["mime"].startswith("image/") and att["size"] < 25 * 1024 * 1024:
             lbl = ClickLabel("Загрузка изображения…")
             lbl.setObjectName("muted")
@@ -152,6 +179,35 @@ class MessageWidget(QWidget):
         btn.setToolTip("Сохранить файл")
         btn.clicked.connect(lambda _=False, a=att: self.view.save_attachment.emit(a))
         return btn
+
+    def _gif_attachment(self, att: dict) -> QWidget:
+        """Анимированный GIF прямо в чате (QMovie по скачанному файлу)."""
+        lbl = ClickLabel("Загрузка GIF…")
+        lbl.setObjectName("muted")
+        lbl.setCursor(Qt.PointingHandCursor)
+        lbl.setToolTip(f'{att["name"]} · {fmt_size(att["size"])} — нажмите, чтобы открыть')
+        lbl.clicked.connect(lambda a=att: self.view.open_attachment.emit(a))
+
+        def show(path):
+            try:
+                movie = QMovie(str(path))
+                if not movie.isValid():
+                    lbl.setText(f'🖼 {att["name"]} (не удалось показать)')
+                    return
+                movie.jumpToFrame(0)
+                size = movie.frameRect().size()
+                if size.width() > THUMB_W or size.height() > THUMB_H:
+                    size.scale(THUMB_W, THUMB_H, Qt.KeepAspectRatio)
+                movie.setScaledSize(size)
+                lbl.setMovie(movie)
+                lbl.setFixedSize(size.width(), size.height())
+                movie.start()
+                self.view.content_resized()
+            except RuntimeError:
+                pass  # виджет уже удалён
+
+        self.view.images.get_path(att["id"], att["name"], show)
+        return lbl
 
     def _menu(self, pos):
         m = QMenu(self)
@@ -309,6 +365,7 @@ class Composer(QWidget):
     def __init__(self):
         super().__init__()
         self.files: list[str] = []
+        self.settings = None                     # задаёт MainWindow (нужен для ключей GIF)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 0, 16, 16)
         lay.setSpacing(6)
@@ -336,11 +393,43 @@ class Composer(QWidget):
         self.edit.paste_image.connect(self._paste_image)
         self.edit.paste_files.connect(self.add_files)
         self.edit.textChanged.connect(self._changed)
+        from .emoji import EmojiButton
+        self.emoji_btn = EmojiButton(self._insert_emoji)
+        self.gif_btn = QPushButton("GIF")
+        self.gif_btn.setObjectName("attach")
+        self.gif_btn.setFixedSize(44, 44)
+        self.gif_btn.setToolTip("Найти и отправить GIF (GIPHY)")
+        self.gif_btn.setStyleSheet("font-weight: 700; font-size: 9pt;")
+        self.gif_btn.clicked.connect(self._open_gif)
         row.addWidget(self.attach)
         row.addSpacing(6)
         row.addWidget(self.edit, 1)
+        row.addSpacing(6)
+        row.addWidget(self.emoji_btn)
+        row.addSpacing(6)
+        row.addWidget(self.gif_btn)
         lay.addLayout(row)
         self._last_typing = 0.0
+
+    def _insert_emoji(self, e: str):
+        self.edit.insertPlainText(e)
+        self.edit.setFocus()
+
+    def _open_gif(self):
+        from .gif import GifDialog, download_gif
+        dlg = GifDialog(self.settings or {}, self)
+        if dlg.exec() and dlg.selected:
+            url = dlg.selected
+            self.set_status("Скачиваю GIF…")
+
+            def done(path):
+                self.set_status("")
+                self.add_files([path])
+
+            def fail(e):
+                self.set_status(f"Не удалось скачать GIF: {e}")
+
+            run_bg(lambda: download_gif(url), on_done=done, on_fail=fail)
 
     def set_channel_name(self, name: str):
         self.edit.setPlaceholderText(f"Написать в #{name}")

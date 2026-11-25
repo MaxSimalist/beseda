@@ -80,6 +80,7 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._voice_tab(), "Голос и звук")
+        tabs.addTab(self._screen_tab(), "Экран и GIF")
         tabs.addTab(self._profile_tab(), "Профиль")
         lay = QVBoxLayout(self)
         lay.addWidget(tabs)
@@ -291,6 +292,45 @@ class SettingsDialog(QDialog):
                 self._set_ptt(vk, name)
                 return
         super().mousePressEvent(e)
+
+    # ------------------------------------------------------------ вкладка «Экран и GIF»
+    def _screen_tab(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+
+        fps = QComboBox()
+        for f, label in ((10, "10 к/с — слабый интернет"), (15, "15 к/с — по умолчанию"), (30, "30 к/с — плавно")):
+            fps.addItem(label, f)
+        self._select(fps, int(self.s.value("cast/fps", 15) or 15))
+        fps.currentIndexChanged.connect(
+            lambda _: self.s.setValue("cast/fps", fps.currentData()))
+        form.addRow("Частота кадров", fps)
+
+        br = QComboBox()
+        for label, bps in (("Низкое — 1 Мбит/с", 1_000_000), ("Среднее — 2 Мбит/с", 2_000_000),
+                           ("Высокое — 4 Мбит/с", 4_000_000)):
+            br.addItem(label, bps)
+        self._select(br, int(self.s.value("cast/bitrate", 2_000_000) or 2_000_000))
+        br.currentIndexChanged.connect(
+            lambda _: self.s.setValue("cast/bitrate", br.currentData()))
+        form.addRow("Качество трансляции", br)
+
+        note = QLabel("Демонстрация запускается кнопкой 🖥 в голосовой панели "
+                      "(нужно быть подключённым к голосовому каналу).")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        form.addRow(note)
+
+        key = QLineEdit(self.s.value("giphy_key", ""))
+        key.setPlaceholderText("API-ключ GIPHY — developers.giphy.com → Create an App → API")
+        key.editingFinished.connect(lambda: self.s.setValue("giphy_key", key.text().strip()))
+        form.addRow("Ключ GIPHY (гифки)", key)
+        hint = QLabel("Бесплатный ключ: developers.giphy.com → Create an App → выберите «API». "
+                      "Без ключа кнопка GIF откроет окно с инструкцией.")
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        form.addRow(hint)
+        return w
 
     # ------------------------------------------------------------ вкладка «Профиль»
     def _profile_tab(self) -> QWidget:

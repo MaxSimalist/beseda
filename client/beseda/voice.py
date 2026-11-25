@@ -30,6 +30,7 @@ log = logging.getLogger("beseda.voice")
 
 KIND_HELLO = 0
 KIND_AUDIO = 1
+KIND_VIDEO = 2
 SELF_ID = 0  # «говорящий» для самопрослушивания
 
 PREBUFFER = 3       # кадров (60 мс) копим перед началом воспроизведения говорящего
@@ -168,6 +169,11 @@ class VoiceEngine:
         self._recv_thread: threading.Thread | None = None
         self._running = threading.Event()
         self._audio_on = False
+
+        # демонстрация экрана
+        self.caster = None                      # screen.ScreenCaster, пока идёт трансляция
+        self.on_video_frame = None              # callback(uid, h264_bytes, key) из потока приёма
+        self._assemblers: dict[int, object] = {}
 
     # ============================================================ аудио
     @property
@@ -404,6 +410,43 @@ class VoiceEngine:
                 codec_id = plain[5]
                 seq = struct.unpack_from(">H", plain, 6)[0]
                 self.receive_audio(uid, codec_id, seq, plain[8:])
+            elif plain[0] == KIND_VIDEO and len(plain) >= 11:
+                uid = struct.unpack_from(">I", plain, 1)[0]
+                self._receive_video(uid, plain[5:])
+
+    def _receive_video(self, uid: int, frag: bytes):
+        from . import screen
+        asm = self._assemblers.get(uid)
+        if asm is None:
+            asm = self._assemblers[uid] = screen.FrameAssembler()
+        done = asm.feed(frag)
+        if done and self.on_video_frame:
+            data, key = done
+            try:
+                self.on_video_frame(uid, data, key)
+            except Exception:
+                log.debug("обработчик видеокадра упал", exc_info=True)
+
+    # ============================================================ демонстрация экрана
+    def start_cast(self, monitor: int, fps: int, bitrate: int, on_error=None) -> bool:
+        """Начать трансляцию экрана. False — не получилось (нет av/монитора)."""
+        from . import screen
+        if self.caster and self.caster.running:
+            return True
+        if not self._crypto or not screen.available():
+            return False
+
+        def on_chunk(payload: bytes, key: bool):
+            self._send_raw(bytes([KIND_VIDEO]) + payload)
+
+        self.caster = screen.ScreenCaster(monitor, fps, bitrate, on_chunk, on_error=on_error)
+        self.caster.start()
+        return True
+
+    def stop_cast(self):
+        c, self.caster = self.caster, None
+        if c:
+            c.stop()
 
     def receive_audio(self, uid: int, codec_id: int, seq: int, payload: bytes):
         with self.lock:
@@ -453,6 +496,8 @@ class VoiceEngine:
             self.start_audio()
 
     def disconnect(self):
+        self.stop_cast()
+        self._assemblers.clear()
         self._crypto = None
         sock, self._sock = self._sock, None
         if sock:
