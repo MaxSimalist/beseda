@@ -27,7 +27,7 @@ from .config import Config
 from .db import DB, check_password
 from .voice import VoiceRelay
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 log = logging.getLogger("beseda")
 
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.\-]{2,32}$")
@@ -771,8 +771,23 @@ def create_app(cfg: Config | None = None) -> Starlette:
             sched.cancel()
             transport.close()
 
+    WEB_STATIC = Path(__file__).parent / "web_static"
+    SITE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
+    def site(name: str, mime: str):
+        """Публичная страница регистрации (лендинг)."""
+        async def handler(request):
+            return FileResponse(WEB_STATIC / name, media_type=mime, headers={
+                "Content-Security-Policy": SITE_CSP, "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache", "Referrer-Policy": "no-referrer"})
+        return handler
+
     app = Starlette(
         routes=[
+            Route("/", site("index.html", "text/html; charset=utf-8")),
+            Route("/site.css", site("site.css", "text/css; charset=utf-8")),
+            Route("/site.js", site("site.js", "text/javascript; charset=utf-8")),
             Route("/api/info", info),
             Route("/api/register", register, methods=["POST"]),
             Route("/api/login", login, methods=["POST"]),
@@ -781,7 +796,7 @@ def create_app(cfg: Config | None = None) -> Starlette:
             Route("/api/upload", upload, methods=["POST"]),
             Route("/api/files/{fid}", download),
             WebSocketRoute("/ws", ws_endpoint),
-            *admin_routes(hub, auth_user, json_body, err),
+            *admin_routes(hub, auth_user, json_body, err, client_ip),
         ],
         lifespan=lifespan,
     )

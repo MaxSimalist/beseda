@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Беседа — регистрация</title>
+<link rel="stylesheet" href="/site.css">
+<script src="/site.js" defer></script>
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <div class="logo">Б</div>
+    <h1>Беседа</h1>
+    <p class="muted" id="tagline">Свой сервер общения: текст, файлы, голос и демонстрация экрана.</p>
+    <div class="pill-row">
+      <span class="pill" id="srvState">проверяю сервер…</span>
+    </div>
+  </section>
+
+  <section class="card" id="regCard">
+    <h2>Создать аккаунт</h2>
+    <form id="regForm" autocomplete="on">
+      <label>Логин
+        <input id="rUser" name="username" autocomplete="username" maxlength="32" required
+               placeholder="буквы, цифры, _ . - (2–32 символа)">
+      </label>
+      <label>Пароль
+        <input id="rPass" name="password" type="password" autocomplete="new-password" minlength="6" required
+               placeholder="минимум 6 символов">
+      </label>
+      <label>Повторите пароль
+        <input id="rPass2" type="password" autocomplete="new-password" required>
+      </label>
+      <label id="codeRow">Код приглашения
+        <input id="rCode" maxlength="64" placeholder="спросите у администратора сервера">
+      </label>
+      <p class="error" id="rErr"></p>
+      <button class="btn primary wide" type="submit" id="rBtn">Зарегистрироваться</button>
+    </form>
+  </section>
+
+  <section class="card hidden" id="doneCard">
+    <h2>Готово! 🎉</h2>
+    <p>Аккаунт <b id="doneUser"></b> создан. Теперь:</p>
+    <ol class="steps">
+      <li>Скачайте клиент для Windows:
+        <a href="https://github.com/MaxSimalist/beseda/releases/latest" target="_blank" rel="noopener">последний релиз</a>
+        — файл <code>client-*.zip</code>, распакуйте и запустите <code>Beseda.exe</code>.</li>
+      <li>В окне входа укажите адрес сервера: <code id="srvAddr"></code></li>
+      <li>Войдите своим логином и паролем.</li>
+    </ol>
+    <p class="muted small">Галочка «Игнорировать ошибки SSL» не нужна — у сервера настоящий сертификат.</p>
+  </section>
+
+  <footer class="muted small">
+    <span id="ver"></span> · <a href="https://github.com/MaxSimalist/beseda" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+</main>
+</body>
+</html>

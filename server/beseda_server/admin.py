@@ -5,6 +5,7 @@
 python -m beseda_server.manage make-admin ЛОГИН).
 """
 import collections
+import ipaddress
 import json
 import logging
 import os
@@ -61,15 +62,29 @@ def ring_log() -> RingLog:
     return _ring
 
 
+def _is_private_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
 # ---------------------------------------------------------------- маршруты
-def admin_routes(hub, auth_user, json_body, err) -> list:
+def admin_routes(hub, auth_user, json_body, err, client_ip) -> list:
     db, cfg = hub.db, hub.cfg
     started = time.time()
     ring = ring_log()
 
+    def lan_only() -> bool:
+        """Админка только из локальной сети (настройка, по умолчанию включено)."""
+        return db.get_setting("admin_lan_only", "1") != "0"
+
     def guard(handler, mod: bool = False):
         """mod=True — доступ и модераторам; иначе только администраторам."""
         async def wrapped(request: Request):
+            if lan_only() and not _is_private_ip(client_ip(request)):
+                return err("Админка доступна только из локальной сети", 403)
             u = auth_user(request)
             if not u:
                 return err("Нужна авторизация", 401)
@@ -92,6 +107,8 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
     # --- страница ---
     def static(name: str, mime: str):
         async def handler(request):
+            if lan_only() and not _is_private_ip(client_ip(request)):
+                return err("Админка доступна только из локальной сети", 403)
             return FileResponse(STATIC / name, media_type=mime, headers={
                 "Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
                 "Cache-Control": "no-cache", "Referrer-Policy": "no-referrer"})
@@ -382,7 +399,7 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
                              "env_registration_code": cfg.registration_code,
                              "max_upload_mb": hub.max_upload_mb(), "env_max_upload_mb": cfg.max_upload_mb,
                              "udp_port": cfg.udp_port, "data_dir": str(cfg.data_dir), "version": VERSION,
-                             "schedule": describe(db)})
+                             "admin_lan_only": lan_only(), "schedule": describe(db)})
 
     async def settings_set(request):
         data = await json_body(request)
@@ -401,6 +418,9 @@ def admin_routes(hub, auth_user, json_body, err) -> list:
                     return err("Размер файла: от 1 до 4096 МБ")
                 db.set_setting("max_upload_mb", mb)
             audit(request, "изменил лимит файла: %s МБ", hub.max_upload_mb())
+        if "admin_lan_only" in data:
+            db.set_setting("admin_lan_only", "1" if data["admin_lan_only"] else "0")
+            audit(request, "админка только из локальной сети: %s", "вкл" if data["admin_lan_only"] else "ВЫКЛ")
         if "schedule" in data:                           # расписание обслуживания
             s = data["schedule"] or {}
             try:

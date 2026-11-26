@@ -607,6 +607,7 @@ async function loadSettings() {
     kv.append(h("dt", { text: k }), h("dd", { text: String(v) }));
   }
   $("#ver").textContent = "версия " + s.version;
+  $("#lanOnly").checked = !!s.admin_lan_only;
   const sc = s.schedule || {};
   $("#schEnabled").checked = !!sc.enabled;
   $("#schRestart").checked = !!sc.restart;
@@ -639,6 +640,11 @@ $("#maxUpSave").addEventListener("click", () => {
   const mb = parseInt($("#maxUp").value, 10);
   if (!mb || mb < 1 || mb > 4096) return toast("Размер файла: от 1 до 4096 МБ", true);
   act("/api/admin/settings", { max_upload_mb: mb }, "Лимит файла: " + mb + " МБ");
+});
+$("#lanOnly").addEventListener("change", () => {
+  const on = $("#lanOnly").checked;
+  act("/api/admin/settings", { admin_lan_only: on },
+      on ? "Админка — только из локальной сети" : "Админка доступна извне (осторожно!)");
 });
 
 /* --- перезагрузка --- */
